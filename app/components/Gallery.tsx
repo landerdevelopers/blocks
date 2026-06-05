@@ -67,7 +67,7 @@ export default function Gallery({
   cols?: number;
   loggedIn: boolean;
   onRequireLogin: () => void;
-  onCopy: () => boolean;
+  onCopy: (componentId: string) => boolean;
   category?: string | null;
   filters?: string[];
   colorSearchActive?: boolean;
@@ -75,6 +75,7 @@ export default function Gallery({
   colorSearchResults?: Component[] | null;
 }) {
   const isAdmin = useAuthStore((s) => s.isAdmin);
+  const authLoading = useAuthStore((s) => s.authLoading);
   // Shared list in the store so new uploads appear instantly (no refetch).
   const components = useAuthStore((s) => s.components);
   const componentsLoaded = useAuthStore((s) => s.componentsLoaded);
@@ -113,9 +114,6 @@ export default function Gallery({
     };
   }, [setComponents]);
 
-  // Skeletons only on the very first load with no cache to seed from.
-  const loading = !componentsLoaded;
-
   const dbCategory = category ? CAT_MAP[category] : null;
   const isLogos = dbCategory === "Logos";
 
@@ -124,15 +122,28 @@ export default function Gallery({
     return components.filter((c) => {
       if (dbCategory && c.category !== dbCategory) return false;
       if (filters.length) {
-        const inFilters = (c.filters ?? []).some((f) => filters.includes(f));
-        const inSection = c.section ? filters.includes(c.section) : false;
-        if (!inFilters && !inSection) return false;
+        if (dbCategory === "Logos") {
+          // Letters are a union — show a component matching any selected letter.
+          if (!filters.some((f) => (c.filters ?? []).includes(f))) return false;
+        } else {
+          // Exact match: every selected value must match the component's
+          // section or be present in its filters (AND, not OR).
+          const matchesAll = filters.every(
+            (f) => c.section === f || (c.filters ?? []).includes(f),
+          );
+          if (!matchesAll) return false;
+        }
       }
       return true;
     });
   }, [components, dbCategory, filters]);
 
   const cfg = BTN[Math.min(6, Math.max(1, cols))] ?? BTN[3];
+
+  // Track which images finished loading, to reserve height + fade them in.
+  const [loadedIds, setLoadedIds] = useState<Set<string>>(() => new Set());
+  const markLoaded = (id: string) =>
+    setLoadedIds((prev) => new Set(prev).add(id));
 
   const [copied, setCopied] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -186,8 +197,9 @@ export default function Gallery({
       <button
         type="button"
         onClick={async () => {
+          if (authLoading) return; // wait for the session to resolve
           if (!loggedIn) return onRequireLogin();
-          if (!onCopy()) return;
+          if (!onCopy(id)) return;
           if (figmaUrl) {
             try {
               await navigator.clipboard.writeText(figmaUrl);
@@ -214,13 +226,25 @@ export default function Gallery({
             : "bottom-6 left-1/2 -translate-x-1/2 translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
         }`}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          alt=""
-          src={isCopied ? "/Tick.png" : "/figma.png"}
-          style={{ width: cfg.img, height: cfg.img }}
-        />
-        {isCopied ? "Copied Successfully!" : "Copy to Figma"}
+        {authLoading ? (
+          <>
+            <span
+              className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+              style={{ width: cfg.img, height: cfg.img }}
+            />
+            Loading…
+          </>
+        ) : (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              alt=""
+              src={isCopied ? "/Tick.png" : "/figma.png"}
+              style={{ width: cfg.img, height: cfg.img }}
+            />
+            {isCopied ? "Copied Successfully!" : "Copy to Figma"}
+          </>
+        )}
       </button>
     );
   };
@@ -269,7 +293,7 @@ export default function Gallery({
     );
     list.forEach((c, i) => buckets[i % buckets.length].push(c));
     return (
-      <main className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
+      <main suppressHydrationWarning className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
         {buckets.map((col, i) => (
           <div key={i} className="flex flex-1 flex-col gap-3.5">
             {col.map((c) => (
@@ -284,13 +308,19 @@ export default function Gallery({
                     c.preview_url &&
                     setLightbox({ src: c.preview_url, logo: false })
                   }
-                  className="w-full cursor-pointer overflow-hidden rounded-md border border-[#e7e9ee]"
+                  className="relative min-h-[200px] w-full cursor-pointer overflow-hidden rounded-md border border-[#e7e9ee] bg-[#e4e4e7]"
                 >
+                  {!loadedIds.has(c.id) && (
+                    <div className="absolute inset-0 animate-pulse bg-[#e4e4e7]" />
+                  )}
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     alt=""
                     src={c.preview_url ?? ""}
-                    className="block h-auto w-full rounded-md object-cover"
+                    onLoad={() => markLoaded(c.id)}
+                    className={`block h-auto w-full rounded-md object-cover transition-opacity duration-300 ${
+                      loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
+                    }`}
                   />
                 </div>
                 {copyButton(c.id, false, c.figma_url)}
@@ -325,30 +355,7 @@ export default function Gallery({
     return renderGrid(results);
   }
 
-  // Initial load with no cache → skeleton grid matching the card layout.
-  if (loading) {
-    const n = Math.max(1, cols);
-    const cols2 = Array.from({ length: n }, () => [] as number[]);
-    Array.from({ length: 12 }).forEach((_, i) => cols2[i % n].push(i));
-    return (
-      <main className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
-        {cols2.map((col, i) => (
-          <div key={i} className="flex flex-1 flex-col gap-3.5">
-            {col.map((j) => (
-              <div
-                key={j}
-                className="w-full overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5"
-              >
-                <div className="aspect-[4/3] w-full animate-pulse rounded-md bg-[#e4e4e7]" />
-              </div>
-            ))}
-          </div>
-        ))}
-      </main>
-    );
-  }
-
-  const empty = !loading && filtered.length === 0;
+  const empty = filtered.length === 0;
 
   if (empty) {
     return (
@@ -376,7 +383,7 @@ export default function Gallery({
     });
 
     return (
-      <main className="flex h-full flex-1 flex-col gap-6 overflow-y-auto rounded-tl-[22px] bg-white p-4">
+      <main suppressHydrationWarning className="flex h-full flex-1 flex-col gap-6 overflow-y-auto rounded-tl-[22px] bg-white p-4">
         {groups.map(({ letter, items }) => (
           <section key={letter} className="flex flex-col gap-3.5">
             <div className="flex items-center gap-3">
@@ -434,7 +441,7 @@ export default function Gallery({
   filtered.forEach((c, i) => buckets[i % buckets.length].push(c));
 
   return (
-    <main className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
+    <main suppressHydrationWarning className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
       {buckets.map((col, i) => (
         <div key={i} className="flex flex-1 flex-col gap-3.5">
           {col.map((c) => (

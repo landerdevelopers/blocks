@@ -85,14 +85,25 @@ function HomeInner() {
     window.history.replaceState(null, "", window.location.pathname);
   }, [onboardingRedirect, setShowOnboarding]);
 
-  const [cols, setCols] = useState(3);
+  const [cols, setCols] = useState(() => {
+    if (typeof window === "undefined") return 3;
+    // Read the right column count for the last-active context, before paint.
+    const cat = localStorage.getItem("active_category") || "website";
+    if (cat === "logos")
+      return Math.min(6, parseInt(localStorage.getItem("layout_cols_logos") || "4", 10));
+    return Math.min(5, parseInt(localStorage.getItem("layout_cols") || "3", 10));
+  });
   const [showLogin, setShowLogin] = useState(false);
   const [loginNotice, setLoginNotice] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [used, setUsed] = useState(0);
   const [showLimit, setShowLimit] = useState(false);
   // Active sidebar selection — drives which components the gallery shows.
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  // Persisted so the correct category (and its column count) is known on refresh.
+  const [activeCategory, setActiveCategory] = useState<string | null>(() => {
+    if (typeof window === "undefined") return "website";
+    return localStorage.getItem("active_category") || "website";
+  });
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
 
   // Color search — overrides the normal gallery list when active.
@@ -143,19 +154,70 @@ function HomeInner() {
     setColorSearchLoading(false);
   };
 
+  // Persist the active category so it's known synchronously on next load.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem("active_category", activeCategory ?? "website");
+  }, [activeCategory]);
+
+  // Persist the column count per context (logos vs the rest) to localStorage.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const key = activeCategory === "logos" ? "layout_cols_logos" : "layout_cols";
+    localStorage.setItem(key, String(cols));
+  }, [cols, activeCategory]);
+
+  // Load the stored column count for a category (logos keeps its own).
+  const loadColsFor = (id: string | null) => {
+    if (typeof window === "undefined") return;
+    if (id === "logos") {
+      setCols(Math.min(6, parseInt(localStorage.getItem("layout_cols_logos") || "4", 10)));
+    } else {
+      setCols(Math.min(5, parseInt(localStorage.getItem("layout_cols") || "3", 10)));
+    }
+  };
+
   // notice = true when login was triggered by a copy attempt while logged out.
   const openLogin = (notice: boolean) => {
     setLoginNotice(notice);
     setShowLogin(true);
   };
 
-  // One copy: count it, or show the limit popup once exhausted. Returns whether the copy is allowed.
-  const tryCopy = () => {
+  // One copy: count it (DB-backed), or show the limit popup once exhausted.
+  // Returns whether the copy is allowed. DB writes run in the background.
+  const tryCopy = (componentId: string) => {
     if (used >= DAILY_LIMIT) {
       setShowLimit(true);
       return false;
     }
-    setUsed(used + 1);
+    const next = used + 1;
+    setUsed(next);
+
+    if (profile) {
+      const today = todayIST();
+      const supabase = createClient();
+      // Fire-and-forget: log a copy event (trigger bumps components.copy_count)
+      // and bump the profile's daily counter, in parallel.
+      Promise.all([
+        supabase.from("copy_events").insert({
+          user_id: profile.id,
+          component_id: componentId,
+          date: today,
+        }),
+        supabase
+          .from("profiles")
+          .update({ copies_today: next, last_copy_date: today })
+          .eq("id", profile.id),
+      ])
+        .then(([ce, pr]) => {
+          if (ce.error) console.error("[copy] copy_events:", ce.error.message);
+          if (pr.error) console.error("[copy] profiles:", pr.error.message);
+        })
+        .catch((e) => console.error("[copy] persist failed:", e));
+
+      // Keep the store's profile in sync.
+      setProfile({ ...profile, copies_today: next, last_copy_date: today });
+    }
     return true;
   };
 
@@ -163,6 +225,8 @@ function HomeInner() {
     setShowAccount(false);
     await createClient().auth.signOut();
     setProfile(null);
+    // Wipe persisted profile so the next user doesn't see stale data.
+    useAuthStore.persist.clearStorage();
   };
 
   // Seed `used` from the DB so the count survives refreshes. If the profile's
@@ -213,10 +277,11 @@ function HomeInner() {
         onLoginClick={() => openLogin(false)}
         onMenuClick={() => setShowAccount(true)}
         onFilter={(id, filters) => {
+          const switchingContext = (id === "logos") !== (activeCategory === "logos");
           setActiveCategory(id);
           setActiveFilters(filters);
-          // 6-col layout is logos-only — clamp back when leaving.
-          if (id !== "logos" && cols > 5) setCols(5);
+          // Load the stored column count for the new context (logos vs rest).
+          if (switchingContext) loadColsFor(id);
         }}
         maxCols={activeCategory === "logos" ? 6 : 5}
         onColorSearch={runColorSearch}

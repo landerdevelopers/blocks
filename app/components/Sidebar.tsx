@@ -279,6 +279,7 @@ export default function Sidebar({
   onColorClear?: () => void;
 }) {
   const profile = useAuthStore((s) => s.profile);
+  const authLoading = useAuthStore((s) => s.authLoading);
 
   // Published components — used only to compute the count badges.
   const [comps, setComps] = useState<Comp[]>([]);
@@ -302,11 +303,13 @@ export default function Sidebar({
   // switching accordions. Keys are prefixed "<sectionId>:" so one Set holds all.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
 
-  // Selected filters belonging to one section, prefix stripped → bare values.
+  // Selected filters belonging to one section → bare DB values.
+  // Strips the "<sectionId>:" prefix and the "style:" theme marker so values
+  // match the component's section / filters columns directly.
   const sectionFilters = (sectionId: string, keys: Set<string>) =>
     [...keys]
       .filter((k) => k.startsWith(`${sectionId}:`))
-      .map((k) => k.slice(sectionId.length + 1));
+      .map((k) => k.slice(sectionId.length + 1).replace(/^style:/, ""));
 
   // Opening a section closes every other. Closing keeps the right side on that
   // section, so an all-closed sidebar still shows the last opened option.
@@ -388,7 +391,8 @@ export default function Sidebar({
                 <img alt="" src={imgFrame18} className="size-[30px]" />
               </button>
               {/* Line split into `cols` equal segments */}
-              <div className="flex flex-1 items-center gap-1">
+              {/* cols comes from localStorage on the client → suppress SSR mismatch */}
+              <div className="flex flex-1 items-center gap-1" suppressHydrationWarning>
                 {Array.from({ length: cols }).map((_, i) => (
                   <div
                     key={i}
@@ -417,8 +421,13 @@ export default function Sidebar({
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[#f5f5f5] to-transparent" />
       </div>
 
-      {/* Footer — profile when logged in, login prompt when logged out */}
-      {loggedIn ? (
+      {/* Footer — skeleton while auth resolves, then profile or login prompt */}
+      {authLoading ? (
+        <div className="mt-2.5 flex w-full shrink-0 items-center gap-2 rounded-lg border border-[#e7e9ee] bg-white px-3 py-2">
+          <div className="size-[30px] shrink-0 animate-pulse rounded-full bg-[#ebebef]" />
+          <div className="h-4 w-24 animate-pulse rounded-full bg-[#ebebef]" />
+        </div>
+      ) : loggedIn ? (
         <div className="mt-2.5 flex w-full shrink-0 items-center justify-between rounded-lg border border-[#e7e9ee] bg-white px-3 py-2">
           <div className="flex items-center gap-2">
             {profile?.avatar_url ? (
