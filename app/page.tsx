@@ -1,65 +1,118 @@
-import Image from "next/image";
+"use client";
+
+import { useState } from "react";
+import Sidebar from "./components/Sidebar";
+import Gallery from "./components/Gallery";
+import LoginModal from "./components/LoginModal";
+import ProfileModal from "./components/ProfileModal";
+import AccountModal from "./components/AccountModal";
+import LimitModal from "./components/LimitModal";
+
+const DAILY_LIMIT = 10;
 
 export default function Home() {
+  const [cols, setCols] = useState(3);
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
+  const [loginNotice, setLoginNotice] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
+  const [used, setUsed] = useState(0);
+  const [showLimit, setShowLimit] = useState(false);
+  const [showLogos, setShowLogos] = useState(false);
+  const [logoFilter, setLogoFilter] = useState<string[]>([]);
+
+  const openLogin = (notice: boolean) => {
+    setLoginNotice(notice);
+    setShowLogin(true);
+  };
+
+  // One copy: count it, or show the limit popup once exhausted. Returns whether the copy is allowed.
+  const tryCopy = () => {
+    if (used >= DAILY_LIMIT) {
+      setShowLimit(true);
+      return false;
+    }
+    setUsed(used + 1);
+    return true;
+  };
+
+  // Email onboarding → collect profile. Google → straight in, no onboarding.
+  const loginWithEmail = () => {
+    setShowLogin(false);
+    setLoggedIn(true);
+    setShowProfile(true);
+  };
+  const loginWithGoogle = () => {
+    setShowLogin(false);
+    setLoggedIn(true);
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="flex h-screen w-full overflow-hidden bg-[#f5f5f5] pt-4 font-sans">
+      {/* Dev login toggle */}
+      <button
+        type="button"
+        onClick={() => setLoggedIn((v) => !v)}
+        className="fixed left-2 top-2 z-[1100] flex cursor-pointer items-center gap-1.5 rounded-full border border-[#e7e9ee] bg-white/90 px-2 py-1 text-[11px] font-medium tracking-[-0.03em] text-[#09090b] shadow-sm backdrop-blur-sm"
+      >
+        <span
+          className={`size-2 rounded-full ${
+            loggedIn ? "bg-[#1C9A00]" : "bg-[#d4d4d8]"
+          }`}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        {loggedIn ? "Logged in" : "Logged out"}
+      </button>
+
+      <Sidebar
+        cols={cols}
+        onColsChange={setCols}
+        loggedIn={loggedIn}
+        onLoginClick={() => openLogin(false)}
+        onMenuClick={() => setShowAccount(true)}
+        onFilter={(id, filters) => {
+          const logos = id === "logos";
+          setShowLogos(logos);
+          setLogoFilter(logos ? filters : []);
+          // 6-col layout is logos-only — clamp back when leaving.
+          if (!logos && cols > 5) setCols(5);
+        }}
+        maxCols={showLogos ? 6 : 5}
+      />
+      <Gallery
+        cols={cols}
+        loggedIn={loggedIn}
+        onRequireLogin={() => openLogin(true)}
+        onCopy={tryCopy}
+        logos={showLogos}
+        logoFilter={logoFilter}
+      />
+
+      <LoginModal
+        open={showLogin}
+        onClose={() => setShowLogin(false)}
+        notice={loginNotice}
+        onSubmit={loginWithEmail}
+        onGoogle={loginWithGoogle}
+      />
+
+      <ProfileModal open={showProfile} onClose={() => setShowProfile(false)} />
+
+      <AccountModal
+        open={showAccount}
+        onClose={() => setShowAccount(false)}
+        onLogout={() => {
+          setShowAccount(false);
+          setLoggedIn(false);
+        }}
+        used={used}
+      />
+
+      <LimitModal
+        open={showLimit}
+        onClose={() => setShowLimit(false)}
+        limit={DAILY_LIMIT}
+      />
     </div>
   );
 }

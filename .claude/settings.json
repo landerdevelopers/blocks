@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_figma_figma__get_design_context",
+      "mcp__plugin_figma_figma__get_screenshot",
+      "Bash(find node_modules/next/dist/docs -iname '*cookies*' -o -iname '*route-handler*')",
+      "Bash(ls node_modules/@supabase)",
+      "Bash(git check-ignore *)"
+    ]
+  }
+}
