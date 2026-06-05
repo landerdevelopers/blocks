@@ -5,7 +5,11 @@
       "mcp__plugin_figma_figma__get_screenshot",
       "Bash(find node_modules/next/dist/docs -iname '*cookies*' -o -iname '*route-handler*')",
       "Bash(ls node_modules/@supabase)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(rm app/login/page.tsx)",
+      "Bash(rmdir app/login)",
+      "Bash(ls middleware.ts)",
+      "Bash(grep -rn \"router.push\\\\|/login\" components/AuthProvider.tsx)"
     ]
   }
 }

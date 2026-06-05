@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { createClient } from "@/lib/supabase/client";
+import { useAuthStore, type Profile } from "@/store/authStore";
+import { timeUntilMidnightIST } from "@/lib/ist";
 
-const imgLanderBlack = "/Lander_black.png";
 const LIMIT = 10;
 
 export default function AccountModal({
@@ -17,6 +19,21 @@ export default function AccountModal({
   onLogout: () => void;
   used: number;
 }) {
+  const profile = useAuthStore((s) => s.profile);
+  const email = useAuthStore((s) => s.email);
+  const setProfile = useAuthStore((s) => s.setProfile);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Live countdown to midnight IST — recalculated immediately and every 60s.
+  const [reset, setReset] = useState(timeUntilMidnightIST());
+  useEffect(() => {
+    const tick = () => setReset(timeUntilMidnightIST());
+    tick();
+    const id = setInterval(tick, 60000);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -25,6 +42,32 @@ export default function AccountModal({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // Avatar is the only editable field here. Upload to avatars/{uid}/… then
+  // persist the public URL on the profile row.
+  const onChangeAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !profile) return;
+    setUploading(true);
+    const supabase = createClient();
+    const path = `${profile.id}/${Date.now()}-${file.name}`;
+    const { error: upErr } = await supabase.storage
+      .from("avatars")
+      .upload(path, file, { upsert: true });
+    if (upErr) {
+      setUploading(false);
+      return;
+    }
+    const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+    const { data: updated } = await supabase
+      .from("profiles")
+      .update({ avatar_url: data.publicUrl })
+      .eq("id", profile.id)
+      .select("*")
+      .single();
+    if (updated) setProfile(updated as Profile);
+    setUploading(false);
+  };
 
   if (!open || typeof document === "undefined") return null;
 
@@ -37,19 +80,51 @@ export default function AccountModal({
         onClick={(e) => e.stopPropagation()}
         className="flex h-fit w-[400px] flex-col gap-5 rounded-2xl bg-white p-[28px] shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
       >
-        {/* Identity */}
+        {/* Identity — avatar is changeable, name/email are not */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex size-14 items-center justify-center rounded-xl bg-[#f4f4f5]">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img alt="" src={imgLanderBlack} className="h-7 w-[22px]" />
-            </div>
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              aria-label="Change profile picture"
+              className="group relative flex size-14 cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-[#f4f4f5] text-lg font-semibold text-[#09090b]"
+            >
+              {profile?.avatar_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  alt=""
+                  src={profile.avatar_url}
+                  referrerPolicy="no-referrer"
+                  className="size-full object-cover"
+                />
+              ) : (
+                (profile?.full_name ?? "?").charAt(0).toUpperCase()
+              )}
+              {/* Hover/upload overlay */}
+              <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100">
+                {uploading ? (
+                  <span className="text-[10px] font-medium">…</span>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z" />
+                    <circle cx="12" cy="13" r="3" />
+                  </svg>
+                )}
+              </span>
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={onChangeAvatar}
+            />
             <div className="flex flex-col">
               <span className="text-[16px] font-semibold tracking-[-0.03em] text-[#09090b]">
-                Lander Studio
+                {profile?.full_name ?? "Account"}
               </span>
               <span className="text-[14px] tracking-[-0.03em] text-[#71717b]">
-                hello@lander.studio
+                {email ?? ""}
               </span>
             </div>
           </div>
@@ -127,7 +202,7 @@ export default function AccountModal({
             <circle cx="12" cy="12" r="9" />
             <path d="M12 7v5l3 2" />
           </svg>
-          Limit resets in 14h 23m
+          Limit resets in {reset.h}h {reset.m}m
         </div>
       </div>
     </div>,

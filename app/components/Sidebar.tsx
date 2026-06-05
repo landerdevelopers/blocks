@@ -1,7 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ColorSearch from "./ColorSearch";
+import { useAuthStore } from "@/store/authStore";
+import { createClient } from "@/lib/supabase/client";
+
+// Sidebar section id -> public.components.category value.
+const CAT_MAP: Record<string, string> = {
+  website: "Website",
+  mobile: "Mobile Apps",
+  dashboard: "Dashboard",
+  logos: "Logos",
+};
+
+type Comp = {
+  category: string | null;
+  section: string | null;
+  filters: string[] | null;
+};
 
 // Asset URLs sourced from Figma (remote, expire ~7 days).
 const imgVectorLogo = "https://www.figma.com/api/mcp/asset/e43c5089-51a7-45fe-8bd2-b63a7d3b1c34";
@@ -11,11 +27,10 @@ const imgGroup17 = "https://www.figma.com/api/mcp/asset/5c7f3a9d-8975-4483-b2dd-
 const imgLoginUser = "https://www.figma.com/api/mcp/asset/bd04080a-ebbb-4c22-b15b-9d6f989a987b";
 const imgLoginArrow = "https://www.figma.com/api/mcp/asset/e2316c41-86b0-444b-a898-f01386376988";
 
-type Tag = { label: string; count?: number };
+type Tag = { label: string };
 type Section = {
   id: string;
   label: string;
-  count: number;
   tags?: Tag[];
   styles?: string[];
   letters?: string[];
@@ -25,16 +40,15 @@ const sections: Section[] = [
   {
     id: "website",
     label: "Website",
-    count: 120,
     tags: [
-      { label: "Hero", count: 20 },
-      { label: "Bento", count: 30 },
-      { label: "Social Proof", count: 14 },
-      { label: "Features", count: 18 },
-      { label: "Process", count: 30 },
-      { label: "Pricing", count: 22 },
-      { label: "Footer", count: 15 },
-      { label: "Others", count: 15 },
+      { label: "Hero" },
+      { label: "Bento" },
+      { label: "Social Proof" },
+      { label: "Features" },
+      { label: "Process" },
+      { label: "Pricing" },
+      { label: "Footer" },
+      { label: "Others" },
     ],
     styles: [
       "Light",
@@ -50,23 +64,17 @@ const sections: Section[] = [
   {
     id: "mobile",
     label: "Mobile Apps",
-    count: 120,
-    tags: [
-      { label: "Onboarding", count: 20 },
-      { label: "Features", count: 30 },
-    ],
+    tags: [{ label: "Onboarding" }, { label: "Features" }],
     styles: ["Light", "Dark", "Minimal", "Colorful", "Gradient"],
   },
   {
     id: "dashboard",
     label: "Dashboard",
-    count: 10,
     styles: ["Light", "Dark", "Others"],
   },
   {
     id: "logos",
     label: "Logos",
-    count: 40,
     letters: [
       ...Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)),
       "Others",
@@ -123,15 +131,22 @@ function SectionCard({
   onToggle,
   selected,
   onSelect,
+  comps,
 }: {
   section: Section;
   open: boolean;
   onToggle: () => void;
   selected: Set<string>;
   onSelect: (key: string, sectionId: string) => void;
+  comps: Comp[];
 }) {
   const hasContent = !!(section.tags || section.styles || section.letters);
   const select = (key: string) => onSelect(key, section.id);
+
+  // Components in this category — drives the count badges (0 when none).
+  const catComps = comps.filter((c) => c.category === CAT_MAP[section.id]);
+  const sectionCount = (label: string) =>
+    catComps.filter((c) => c.section === label).length;
 
   const Header = (
     <button
@@ -144,7 +159,7 @@ function SectionCard({
           {section.label}
         </span>
         <span className="text-xs tracking-[-0.03em] text-[#71717b]">
-          ({section.count})
+          ({catComps.length})
         </span>
       </div>
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -184,7 +199,7 @@ function SectionCard({
                     <Chip
                       key={key}
                       label={t.label}
-                      count={t.count}
+                      count={sectionCount(t.label)}
                       active={selected.has(key)}
                       onClick={() => select(key)}
                     />
@@ -250,6 +265,8 @@ export default function Sidebar({
   onLoginClick,
   onMenuClick,
   onFilter,
+  onColorSearch,
+  onColorClear,
 }: {
   cols: number;
   onColsChange: (n: number) => void;
@@ -258,7 +275,27 @@ export default function Sidebar({
   onLoginClick: () => void;
   onMenuClick: () => void;
   onFilter: (sectionId: string | null, filters: string[]) => void;
+  onColorSearch?: (colors: string[]) => void;
+  onColorClear?: () => void;
 }) {
+  const profile = useAuthStore((s) => s.profile);
+
+  // Published components — used only to compute the count badges.
+  const [comps, setComps] = useState<Comp[]>([]);
+  useEffect(() => {
+    let alive = true;
+    createClient()
+      .from("components")
+      .select("category, section, filters")
+      .eq("is_published", true)
+      .then(({ data }) => {
+        if (alive) setComps((data as Comp[]) ?? []);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // Accordion: at most one section open at a time.
   const [openId, setOpenId] = useState<string | null>("website");
   // Filters selected per section — persisted across open/close and across
@@ -327,11 +364,12 @@ export default function Sidebar({
               onToggle={() => toggleOpen(s.id)}
               selected={selected}
               onSelect={selectChip}
+              comps={comps}
             />
           ))}
 
           {/* Color search */}
-          <ColorSearch />
+          <ColorSearch onSearch={onColorSearch} onClear={onColorClear} />
 
           {/* Layout setting */}
           <div className="flex w-full shrink-0 flex-col gap-3 rounded-xl border border-[#e7e9ee] bg-white p-3">
@@ -383,12 +421,21 @@ export default function Sidebar({
       {loggedIn ? (
         <div className="mt-2.5 flex w-full shrink-0 items-center justify-between rounded-lg border border-[#e7e9ee] bg-white px-3 py-2">
           <div className="flex items-center gap-2">
-            <div className="flex size-[30px] items-center justify-center rounded-full bg-[#09090b]">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img alt="" src={imgVectorLogo} className="h-[14px] w-[11px] invert" />
-            </div>
+            {profile?.avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                alt=""
+                src={profile.avatar_url}
+                referrerPolicy="no-referrer"
+                className="size-[30px] rounded-full object-cover"
+              />
+            ) : (
+              <div className="flex size-[30px] items-center justify-center rounded-full bg-[#09090b] text-sm font-medium text-white">
+                {(profile?.full_name ?? "?").charAt(0).toUpperCase()}
+              </div>
+            )}
             <span className="text-base font-medium tracking-[-0.03em] text-[#09090b]">
-              Lander Studio
+              {profile?.full_name ?? "Account"}
             </span>
           </div>
           <button

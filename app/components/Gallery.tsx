@@ -1,49 +1,27 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Pencil } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { useAuthStore, type GalleryComponent } from "@/store/authStore";
+import { readComponentsCache } from "@/lib/componentsCache";
 
-// Asset URLs sourced from Figma (remote, expire ~7 days).
-const imgIhp1 = "https://www.figma.com/api/mcp/asset/cd937ef7-62cf-4bcc-86fa-d70576a2aa85";
-const imgIhp2 = "https://www.figma.com/api/mcp/asset/cca8a4cb-e6c5-42fb-afcc-a2f3f6bae393";
-const imgIhp3 = "https://www.figma.com/api/mcp/asset/a3e0d998-ee9b-4bff-8190-4b8b6dd650b8";
-const imgIhp4 = "https://www.figma.com/api/mcp/asset/b1448205-9e74-4dd8-b3da-6d3a0e713e14";
-const imgHeYy = "https://www.figma.com/api/mcp/asset/77d4d2f6-1c3b-4f94-bf41-8f4c2af23c5f";
-const imgNZao = "https://www.figma.com/api/mcp/asset/a409967f-010c-495c-8513-336355bd2eaf";
-const imgZcb = "https://www.figma.com/api/mcp/asset/c7807711-063b-46c3-85d2-f0f2cb5c1809";
-const imgJIa = "https://www.figma.com/api/mcp/asset/5b925670-b949-4dcc-8705-90bca4719e83";
-const imgCNb = "https://www.figma.com/api/mcp/asset/88ca585a-b2f0-47da-aed8-ab7cf6aa1c4a";
-const imgGSa = "https://www.figma.com/api/mcp/asset/e3b149ca-8a57-4005-8a26-4a14fb92b84e";
-const imgGIa = "https://www.figma.com/api/mcp/asset/c20c6e63-5930-4107-bfe1-7bf7c48c6b8a";
-const imgGwb = "https://www.figma.com/api/mcp/asset/782f9e86-c9ea-41f8-9874-459d559e1f03";
+type Component = GalleryComponent;
 
-const columns: { src: string; aspect: string }[][] = [
-  [
-    { src: imgIhp1, aspect: "2880 / 1818" },
-    { src: imgIhp2, aspect: "2880 / 1818" },
-    { src: imgIhp3, aspect: "2880 / 1818" },
-    { src: imgIhp4, aspect: "2880 / 1818" },
-  ],
-  [
-    { src: imgHeYy, aspect: "4096 / 2355" },
-    { src: imgNZao, aspect: "1280 / 860" },
-    { src: imgZcb, aspect: "2560 / 1820" },
-    { src: imgJIa, aspect: "1200 / 799" },
-  ],
-  [
-    { src: imgCNb, aspect: "1280 / 800" },
-    { src: imgGSa, aspect: "2160 / 1326" },
-    { src: imgGIa, aspect: "2160 / 1350" },
-    { src: imgGwb, aspect: "2160 / 1497" },
-  ],
-];
+// Sidebar section id -> public.components.category value.
+const CAT_MAP: Record<string, string> = {
+  website: "Website",
+  mobile: "Mobile Apps",
+  dashboard: "Dashboard",
+  logos: "Logos",
+};
 
 const LETTERS = Array.from({ length: 26 }, (_, i) =>
   String.fromCharCode(65 + i),
 );
 
-// "Copy to Figma" button spec per layout (column count). 1 sits top-right; the rest slide up from middle-bottom.
-// w/h = "Copy to Figma" size, cw/ch = "Copied Successfully!" size (wider).
+// "Copy to Figma" button spec per layout (column count).
 const BTN: Record<
   number,
   {
@@ -66,28 +44,93 @@ const BTN: Record<
   6: { w: 112, h: 28, cw: 142, ch: 28, r: 8, img: 16, fs: 13, gap: "gap-1", pos: "b" },
 };
 
+const KBOX: Record<number, { box: number; icon: number }> = {
+  1: { box: 40, icon: 20 },
+  2: { box: 36, icon: 18 },
+  3: { box: 30, icon: 16 },
+  4: { box: 28, icon: 15 },
+  5: { box: 26, icon: 14 },
+  6: { box: 24, icon: 13 },
+};
+
 export default function Gallery({
   cols = 3,
   loggedIn,
   onRequireLogin,
   onCopy,
-  logos = false,
-  logoFilter = [],
+  category = null,
+  filters = [],
+  colorSearchActive = false,
+  colorSearchLoading = false,
+  colorSearchResults = null,
 }: {
   cols?: number;
   loggedIn: boolean;
   onRequireLogin: () => void;
   onCopy: () => boolean;
-  logos?: boolean;
-  logoFilter?: string[];
+  category?: string | null;
+  filters?: string[];
+  colorSearchActive?: boolean;
+  colorSearchLoading?: boolean;
+  colorSearchResults?: Component[] | null;
 }) {
-  // Redistribute every image across `cols` columns (round-robin keeps them balanced).
-  const all = columns.flat();
-  const buckets: { src: string; aspect: string }[][] = Array.from(
-    { length: Math.max(1, cols) },
-    () => [],
-  );
-  all.forEach((img, i) => buckets[i % buckets.length].push(img));
+  const isAdmin = useAuthStore((s) => s.isAdmin);
+  // Shared list in the store so new uploads appear instantly (no refetch).
+  const components = useAuthStore((s) => s.components);
+  const componentsLoaded = useAuthStore((s) => s.componentsLoaded);
+  const setComponents = useAuthStore((s) => s.setComponents);
+
+  // Seed from a fresh (< 5 min) localStorage cache before the store has data,
+  // so a refresh shows components instantly with no skeletons.
+  useEffect(() => {
+    if (componentsLoaded) return;
+    const cached = readComponentsCache();
+    if (cached) setComponents(cached);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Always background-refetch; update the store/cache only when data changed.
+  useEffect(() => {
+    let alive = true;
+    createClient()
+      .from("components")
+      .select("id, category, section, filters, figma_url, preview_url")
+      .eq("is_published", true)
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (!alive) return;
+        const fresh = (data as Component[]) ?? [];
+        const current = useAuthStore.getState().components;
+        if (JSON.stringify(current) !== JSON.stringify(fresh)) {
+          setComponents(fresh);
+        } else if (!useAuthStore.getState().componentsLoaded) {
+          // Same data but not yet flagged loaded (no cache existed).
+          setComponents(fresh);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [setComponents]);
+
+  // Skeletons only on the very first load with no cache to seed from.
+  const loading = !componentsLoaded;
+
+  const dbCategory = category ? CAT_MAP[category] : null;
+  const isLogos = dbCategory === "Logos";
+
+  // Apply category + filter selection.
+  const filtered = useMemo(() => {
+    return components.filter((c) => {
+      if (dbCategory && c.category !== dbCategory) return false;
+      if (filters.length) {
+        const inFilters = (c.filters ?? []).some((f) => filters.includes(f));
+        const inSection = c.section ? filters.includes(c.section) : false;
+        if (!inFilters && !inSection) return false;
+      }
+      return true;
+    });
+  }, [components, dbCategory, filters]);
 
   const cfg = BTN[Math.min(6, Math.max(1, cols))] ?? BTN[3];
 
@@ -97,13 +140,12 @@ export default function Gallery({
     if (timer.current) clearTimeout(timer.current);
     setCopied(key);
   };
-  // Reset to "Copy to Figma" only after the button has faded out, so size never snaps while visible.
   const resetAfterLeave = () => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopied(null), 320);
   };
 
-  // Lightbox — click an image to view it large. `logo` → render on a white card.
+  // Lightbox.
   const [lightbox, setLightbox] = useState<
     { src: string; logo: boolean } | null
   >(null);
@@ -116,6 +158,73 @@ export default function Gallery({
     return () => document.removeEventListener("keydown", onKey);
   }, [lightbox]);
 
+  // Admin pencil — opens the edit page in a new tab. Slides in from the top.
+  const adminPencil = (id: string) => {
+    if (!isAdmin) return null;
+    const k = KBOX[Math.min(6, Math.max(1, cols))] ?? KBOX[3];
+    const side = cols === 1 ? "left-3" : "right-3";
+    return (
+      <button
+        type="button"
+        aria-label="Edit component"
+        onClick={(e) => {
+          e.stopPropagation();
+          window.open(`/upload/${id}/edit`, "_blank");
+        }}
+        style={{ width: k.box, height: k.box }}
+        className={`absolute top-3 ${side} z-30 flex cursor-pointer items-center justify-center rounded-full border border-[#e7e9ee] bg-white text-[#52525b] opacity-0 shadow-[0px_2px_6px_rgba(0,0,0,0.15)] transition-[opacity,translate] duration-300 ease-out -translate-y-[calc(100%+0.75rem)] pointer-events-none group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100`}
+      >
+        <Pencil size={k.icon} strokeWidth={2} />
+      </button>
+    );
+  };
+
+  // Copy button — shared by both views; `dark` for the logo cards.
+  const copyButton = (id: string, dark: boolean, figmaUrl: string | null) => {
+    const isCopied = copied === id;
+    return (
+      <button
+        type="button"
+        onClick={async () => {
+          if (!loggedIn) return onRequireLogin();
+          if (!onCopy()) return;
+          if (figmaUrl) {
+            try {
+              await navigator.clipboard.writeText(figmaUrl);
+            } catch {
+              // clipboard may be blocked; still show the copied state
+            }
+          }
+          markCopied(id);
+        }}
+        style={{
+          width: isCopied ? cfg.cw : cfg.w,
+          height: isCopied ? cfg.ch : cfg.h,
+          borderRadius: cfg.r,
+          fontSize: cfg.fs,
+          ...(isCopied
+            ? { backgroundColor: "#deffd7", color: "#1C9A00", borderColor: "#BAFFAA" }
+            : {}),
+        }}
+        className={`pointer-events-none absolute z-10 flex items-center justify-center whitespace-nowrap border font-medium tracking-[-0.03em] opacity-0 shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,translate] duration-300 ease-out group-hover:pointer-events-auto group-hover:opacity-100 ${cfg.gap} ${
+          dark ? "border-black bg-black text-white" : "border-[#e7e9ee] bg-white text-[#09090b]"
+        } ${
+          cfg.pos === "tr"
+            ? "right-6 top-6 -translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
+            : "bottom-6 left-1/2 -translate-x-1/2 translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
+        }`}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          alt=""
+          src={isCopied ? "/Tick.png" : "/figma.png"}
+          style={{ width: cfg.img, height: cfg.img }}
+        />
+        {isCopied ? "Copied Successfully!" : "Copy to Figma"}
+      </button>
+    );
+  };
+
   const renderLightbox = () =>
     lightbox && typeof document !== "undefined"
       ? createPortal(
@@ -127,7 +236,6 @@ export default function Gallery({
               onClick={(e) => e.stopPropagation()}
               className="relative inline-block"
             >
-              {/* Close — black glassy, white icon; pinned to the image corner */}
               <button
                 type="button"
                 onClick={() => setLightbox(null)}
@@ -153,20 +261,127 @@ export default function Gallery({
         )
       : null;
 
-  // Logos view — letter sections, each a grid of logo marks.
-  if (logos) {
+  // Reusable masonry grid for a given component list.
+  const renderGrid = (list: Component[]) => {
+    const buckets: Component[][] = Array.from(
+      { length: Math.max(1, cols) },
+      () => [],
+    );
+    list.forEach((c, i) => buckets[i % buckets.length].push(c));
+    return (
+      <main className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
+        {buckets.map((col, i) => (
+          <div key={i} className="flex flex-1 flex-col gap-3.5">
+            {col.map((c) => (
+              <div
+                key={c.id}
+                onMouseLeave={resetAfterLeave}
+                className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
+              >
+                {adminPencil(c.id)}
+                <div
+                  onClick={() =>
+                    c.preview_url &&
+                    setLightbox({ src: c.preview_url, logo: false })
+                  }
+                  className="w-full cursor-pointer overflow-hidden rounded-md border border-[#e7e9ee]"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    alt=""
+                    src={c.preview_url ?? ""}
+                    className="block h-auto w-full rounded-md object-cover"
+                  />
+                </div>
+                {copyButton(c.id, false, c.figma_url)}
+              </div>
+            ))}
+          </div>
+        ))}
+        {renderLightbox()}
+      </main>
+    );
+  };
+
+  // Color search overrides the normal list while active.
+  if (colorSearchActive) {
+    if (colorSearchLoading) {
+      return (
+        <main className="flex h-full flex-1 items-center justify-center rounded-tl-[22px] bg-white p-4">
+          <div className="size-8 animate-spin rounded-full border-2 border-[#e4e4e7] border-t-[#2974ff]" />
+        </main>
+      );
+    }
+    const results = colorSearchResults ?? [];
+    if (results.length === 0) {
+      return (
+        <main className="flex h-full flex-1 items-center justify-center rounded-tl-[22px] bg-white p-4">
+          <p className="text-sm tracking-[-0.03em] text-[#71717b]">
+            No components found for this color
+          </p>
+        </main>
+      );
+    }
+    return renderGrid(results);
+  }
+
+  // Initial load with no cache → skeleton grid matching the card layout.
+  if (loading) {
+    const n = Math.max(1, cols);
+    const cols2 = Array.from({ length: n }, () => [] as number[]);
+    Array.from({ length: 12 }).forEach((_, i) => cols2[i % n].push(i));
+    return (
+      <main className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
+        {cols2.map((col, i) => (
+          <div key={i} className="flex flex-1 flex-col gap-3.5">
+            {col.map((j) => (
+              <div
+                key={j}
+                className="w-full overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5"
+              >
+                <div className="aspect-[4/3] w-full animate-pulse rounded-md bg-[#e4e4e7]" />
+              </div>
+            ))}
+          </div>
+        ))}
+      </main>
+    );
+  }
+
+  const empty = !loading && filtered.length === 0;
+
+  if (empty) {
+    return (
+      <main className="flex h-full flex-1 items-center justify-center rounded-tl-[22px] bg-white p-4">
+        <div className="flex max-w-md flex-col items-center gap-3 text-center">
+          <span className="text-6xl">🪹</span>
+          <p className="text-xl font-medium tracking-[-0.03em] text-[#09090b]">
+            It&apos;s a bit empty in here…
+          </p>
+        </div>
+        {renderLightbox()}
+      </main>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Logos view — group components by letter (from their filters).
+  // ---------------------------------------------------------------------------
+  if (isLogos) {
     const n = Math.min(6, Math.max(1, cols));
-    // No filter → all letters; picked letters → just those sections.
-    const shown = logoFilter.length
-      ? LETTERS.filter((l) => logoFilter.includes(l))
-      : LETTERS;
+    const groups: { letter: string; items: Component[] }[] = [];
+    [...LETTERS, "Others"].forEach((letter) => {
+      const items = filtered.filter((c) => (c.filters ?? []).includes(letter));
+      if (items.length) groups.push({ letter, items });
+    });
+
     return (
       <main className="flex h-full flex-1 flex-col gap-6 overflow-y-auto rounded-tl-[22px] bg-white p-4">
-        {shown.map((letter) => (
+        {groups.map(({ letter, items }) => (
           <section key={letter} className="flex flex-col gap-3.5">
             <div className="flex items-center gap-3">
               <h2 className="whitespace-nowrap text-sm tracking-[-0.03em] text-black">
-                Letter {letter}
+                {letter === "Others" ? "Others" : `Letter ${letter}`}
               </h2>
               <div className="h-0.5 flex-1 rounded-full bg-[#E4E4E7]" />
             </div>
@@ -174,23 +389,22 @@ export default function Gallery({
               className="grid gap-3.5"
               style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
             >
-              {Array.from({ length: n }).map((_, i) => {
-                const lkey = `logo-${letter}-${i}`;
-                const isCopied = copied === lkey;
-                return (
+              {items.map((c) => (
                 <div
-                  key={i}
+                  key={c.id}
                   onMouseLeave={resetAfterLeave}
                   className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
                 >
+                  {adminPencil(c.id)}
                   <div
-                    onClick={() => setLightbox({ src: "/temp.png", logo: true })}
+                    onClick={() =>
+                      c.preview_url &&
+                      setLightbox({ src: c.preview_url, logo: true })
+                    }
                     className="flex w-full cursor-pointer items-center justify-center overflow-hidden rounded-md border border-[#e7e9ee] bg-white"
                     style={{
-                      // Taller, narrower cards — more so as columns grow.
                       aspectRatio:
                         n >= 6 ? "3 / 4" : n >= 5 ? "4 / 5" : n >= 3 ? "1 / 1" : "5 / 4",
-                      // Less padding as columns grow, so the mark stays large.
                       padding:
                         n >= 6 ? 16 : n >= 5 ? 24 : n >= 4 ? 32 : n >= 3 ? 48 : 72,
                     }}
@@ -198,44 +412,13 @@ export default function Gallery({
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       alt=""
-                      src="/temp.png"
+                      src={c.preview_url ?? ""}
                       className="size-full object-contain"
                     />
                   </div>
-
-                  {/* Copy to Figma — black variant for logos */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!loggedIn) return onRequireLogin();
-                      if (onCopy()) markCopied(lkey);
-                    }}
-                    style={{
-                      width: isCopied ? cfg.cw : cfg.w,
-                      height: isCopied ? cfg.ch : cfg.h,
-                      borderRadius: cfg.r,
-                      fontSize: cfg.fs,
-                      ...(isCopied
-                        ? { backgroundColor: "#deffd7", color: "#1C9A00", borderColor: "#BAFFAA" }
-                        : {}),
-                    }}
-                    className={`pointer-events-none absolute z-10 flex items-center justify-center whitespace-nowrap border border-black bg-black font-medium tracking-[-0.03em] text-white opacity-0 shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,translate] duration-300 ease-out group-hover:pointer-events-auto group-hover:opacity-100 ${cfg.gap} ${
-                      cfg.pos === "tr"
-                        ? "right-6 top-6 -translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
-                        : "bottom-4 left-1/2 -translate-x-1/2 translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
-                    }`}
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      alt=""
-                      src={isCopied ? "/Tick.png" : "/figma.png"}
-                      style={{ width: cfg.img, height: cfg.img }}
-                    />
-                    {isCopied ? "Copied Successfully!" : "Copy to Figma"}
-                  </button>
+                  {copyButton(c.id, true, c.figma_url)}
                 </div>
-                );
-              })}
+              ))}
             </div>
           </section>
         ))}
@@ -244,69 +427,43 @@ export default function Gallery({
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Masonry grid — distribute components across `cols` columns.
+  // ---------------------------------------------------------------------------
+  const buckets: Component[][] = Array.from({ length: Math.max(1, cols) }, () => []);
+  filtered.forEach((c, i) => buckets[i % buckets.length].push(c));
+
   return (
     <main className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
       {buckets.map((col, i) => (
         <div key={i} className="flex flex-1 flex-col gap-3.5">
-          {col.map((img, j) => {
-            const key = `${i}-${j}`;
-            const isCopied = copied === key;
-            return (
+          {col.map((c) => (
             <div
-              key={j}
+              key={c.id}
               onMouseLeave={resetAfterLeave}
               className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
             >
+              {adminPencil(c.id)}
               <div
-                onClick={() => setLightbox({ src: img.src, logo: false })}
+                onClick={() =>
+                  c.preview_url &&
+                  setLightbox({ src: c.preview_url, logo: false })
+                }
                 className="w-full cursor-pointer overflow-hidden rounded-md border border-[#e7e9ee]"
-                style={{ aspectRatio: img.aspect }}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   alt=""
-                  src={img.src}
-                  className="size-full rounded-md object-cover"
+                  src={c.preview_url ?? ""}
+                  className="block h-auto w-full rounded-md object-cover"
                 />
               </div>
-
-              {/* Copy to Figma — appears on hover; turns into a success state on click */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (!loggedIn) return onRequireLogin();
-                  if (onCopy()) markCopied(key);
-                }}
-                style={{
-                  width: isCopied ? cfg.cw : cfg.w,
-                  height: isCopied ? cfg.ch : cfg.h,
-                  borderRadius: cfg.r,
-                  fontSize: cfg.fs,
-                  ...(isCopied
-                    ? { backgroundColor: "#deffd7", color: "#1C9A00", borderColor: "#BAFFAA" }
-                    : {}),
-                }}
-                className={`pointer-events-none absolute z-10 flex items-center justify-center whitespace-nowrap border border-[#e7e9ee] bg-white font-medium tracking-[-0.03em] text-[#09090b] opacity-0 shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,translate] duration-300 ease-out group-hover:pointer-events-auto group-hover:opacity-100 ${cfg.gap} ${
-                  cfg.pos === "tr"
-                    ? "right-6 top-6 -translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
-                    : "bottom-6 left-1/2 -translate-x-1/2 translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
-                }`}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  alt=""
-                  src={isCopied ? "/Tick.png" : "/figma.png"}
-                  style={{ width: cfg.img, height: cfg.img }}
-                />
-                {isCopied ? "Copied Successfully!" : "Copy to Figma"}
-              </button>
+              {copyButton(c.id, false, c.figma_url)}
             </div>
-            );
-          })}
+          ))}
         </div>
       ))}
 
-      {/* Lightbox */}
       {renderLightbox()}
     </main>
   );

@@ -32,7 +32,13 @@ function hsvToHex(h: number, s: number, v: number) {
 
 const clamp = (n: number) => Math.min(1, Math.max(0, n));
 
-export default function ColorSearch() {
+export default function ColorSearch({
+  onSearch,
+  onClear,
+}: {
+  onSearch?: (colors: string[]) => void;
+  onClear?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [colors, setColors] = useState<string[]>([]);
   const [hue, setHue] = useState(220);
@@ -147,10 +153,10 @@ export default function ColorSearch() {
 
   const search = () => {
     // Keep at most 2 colors — drop the oldest when full.
-    setColors((prev) =>
-      prev.includes(hex) ? prev : [...prev, hex].slice(-2),
-    );
+    const next = colors.includes(hex) ? colors : [...colors, hex].slice(-2);
+    setColors(next);
     setOpen(false);
+    onSearch?.(next);
   };
 
   return (
@@ -195,7 +201,13 @@ export default function ColorSearch() {
           <button
             key={c}
             type="button"
-            onClick={() => setColors((prev) => prev.filter((x) => x !== c))}
+            onClick={() => {
+              const next = colors.filter((x) => x !== c);
+              setColors(next);
+              // Keep results in sync: re-search the rest, or clear if none left.
+              if (next.length === 0) onClear?.();
+              else onSearch?.(next);
+            }}
             title={`Remove ${c}`}
             className="group relative size-[30px] shrink-0 cursor-pointer rounded-full ring-1 ring-inset ring-black/10"
             style={{ backgroundColor: c }}
@@ -220,6 +232,7 @@ export default function ColorSearch() {
               : "-ml-2.5 size-0 scale-50 opacity-0"
           }`}
         />
+
       </div>
 
       {/* Color picker popover — portal'd, fixed, right-aligned, opens upward */}
