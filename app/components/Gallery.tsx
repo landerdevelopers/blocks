@@ -126,12 +126,20 @@ export default function Gallery({
           // Letters are a union — show a component matching any selected letter.
           if (!filters.some((f) => (c.filters ?? []).includes(f))) return false;
         } else {
-          // Exact match: every selected value must match the component's
-          // section or be present in its filters (AND, not OR).
-          const matchesAll = filters.every(
-            (f) => c.section === f || (c.filters ?? []).includes(f),
-          );
-          if (!matchesAll) return false;
+          // Two groups, AND'd together. Tags (no prefix) match the section and
+          // are a union among themselves. Themes ("style:" prefix) narrow the
+          // result, also a union. Pick "Hero", "Bento" + "Dark" → section is
+          // Hero OR Bento, AND a Dark theme.
+          const tags = filters.filter((f) => !f.startsWith("style:"));
+          const themes = filters
+            .filter((f) => f.startsWith("style:"))
+            .map((f) => f.slice("style:".length));
+          if (tags.length && !tags.includes(c.section ?? "")) return false;
+          if (
+            themes.length &&
+            !themes.some((t) => (c.filters ?? []).includes(t))
+          )
+            return false;
         }
       }
       return true;
@@ -139,11 +147,6 @@ export default function Gallery({
   }, [components, dbCategory, filters]);
 
   const cfg = BTN[Math.min(6, Math.max(1, cols))] ?? BTN[3];
-
-  // Track which images finished loading, to reserve height + fade them in.
-  const [loadedIds, setLoadedIds] = useState<Set<string>>(() => new Set());
-  const markLoaded = (id: string) =>
-    setLoadedIds((prev) => new Set(prev).add(id));
 
   const [copied, setCopied] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -218,7 +221,7 @@ export default function Gallery({
             ? { backgroundColor: "#deffd7", color: "#1C9A00", borderColor: "#BAFFAA" }
             : {}),
         }}
-        className={`pointer-events-none absolute z-10 flex items-center justify-center whitespace-nowrap border font-medium tracking-[-0.03em] opacity-0 shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,translate] duration-300 ease-out group-hover:pointer-events-auto group-hover:opacity-100 ${cfg.gap} ${
+        className={`pointer-events-none absolute z-10 flex cursor-crosshair items-center justify-center whitespace-nowrap border font-medium tracking-[-0.03em] opacity-0 shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,translate] duration-300 ease-out group-hover:pointer-events-auto group-hover:opacity-100 ${cfg.gap} ${
           dark ? "border-black bg-black text-white" : "border-[#e7e9ee] bg-white text-[#09090b]"
         } ${
           cfg.pos === "tr"
@@ -308,19 +311,13 @@ export default function Gallery({
                     c.preview_url &&
                     setLightbox({ src: c.preview_url, logo: false })
                   }
-                  className="relative min-h-[200px] w-full cursor-pointer overflow-hidden rounded-md border border-[#e7e9ee] bg-[#e4e4e7]"
+                  className="w-full cursor-pointer overflow-hidden rounded-md border border-[#e7e9ee]"
                 >
-                  {!loadedIds.has(c.id) && (
-                    <div className="absolute inset-0 animate-pulse bg-[#e4e4e7]" />
-                  )}
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     alt=""
                     src={c.preview_url ?? ""}
-                    onLoad={() => markLoaded(c.id)}
-                    className={`block h-auto w-full rounded-md object-cover transition-opacity duration-300 ${
-                      loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
-                    }`}
+                    className="block h-auto w-full rounded-md object-cover"
                   />
                 </div>
                 {copyButton(c.id, false, c.figma_url)}

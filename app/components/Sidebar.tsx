@@ -303,13 +303,13 @@ export default function Sidebar({
   // switching accordions. Keys are prefixed "<sectionId>:" so one Set holds all.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
 
-  // Selected filters belonging to one section → bare DB values.
-  // Strips the "<sectionId>:" prefix and the "style:" theme marker so values
-  // match the component's section / filters columns directly.
+  // Selected filters belonging to one section → DB values.
+  // Strips the "<sectionId>:" prefix but KEEPS the "style:" theme marker so the
+  // gallery can tell tags (match section) from themes (narrow within filters).
   const sectionFilters = (sectionId: string, keys: Set<string>) =>
     [...keys]
       .filter((k) => k.startsWith(`${sectionId}:`))
-      .map((k) => k.slice(sectionId.length + 1).replace(/^style:/, ""));
+      .map((k) => k.slice(sectionId.length + 1));
 
   // Opening a section closes every other. Closing keeps the right side on that
   // section, so an all-closed sidebar still shows the last opened option.
@@ -348,13 +348,18 @@ export default function Sidebar({
                 <p className="text-base tracking-[-0.03em] text-[#71717b]">
                   free for the community by
                 </p>
-                <div className="flex items-center gap-1.5">
+                <a
+                  href="https://lander.studio/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5"
+                >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img alt="" src={imgVectorLogo} className="h-[13.6px] w-[10.7px]" />
                   <span className="text-sm font-medium tracking-[-0.03em] text-[#09090b]">
                     Lander Studio
                   </span>
-                </div>
+                </a>
               </div>
             </div>
           </div>

@@ -24,7 +24,7 @@ type ColorRow = {
   colors: { hex: string; pct: number | null }[] | null;
 };
 
-// Best pct among a component's colors that match `hex` within RGB tolerance 30.
+// Best pct among a component's colors that match `hex` within RGB tolerance 100.
 function matchedPct(
   colors: { hex: string; pct: number | null }[] | null,
   hex: string,
@@ -42,9 +42,9 @@ function matchedPct(
     const rgb = parse(c.hex);
     if (!rgb) continue;
     if (
-      Math.abs(rgb[0] - target[0]) <= 30 &&
-      Math.abs(rgb[1] - target[1]) <= 30 &&
-      Math.abs(rgb[2] - target[2]) <= 30
+      Math.abs(rgb[0] - target[0]) <= 100 &&
+      Math.abs(rgb[1] - target[1]) <= 100 &&
+      Math.abs(rgb[2] - target[2]) <= 100
     ) {
       best = Math.max(best, c.pct ?? 0);
     }
@@ -87,11 +87,11 @@ function HomeInner() {
 
   const [cols, setCols] = useState(() => {
     if (typeof window === "undefined") return 3;
-    // Read the right column count for the last-active context, before paint.
+    // One shared column count everywhere. Logos allows up to 6, the rest cap
+    // at 5 — clamp the stored value to the active context's max before paint.
     const cat = localStorage.getItem("active_category") || "website";
-    if (cat === "logos")
-      return Math.min(6, parseInt(localStorage.getItem("layout_cols_logos") || "4", 10));
-    return Math.min(5, parseInt(localStorage.getItem("layout_cols") || "3", 10));
+    const max = cat === "logos" ? 6 : 5;
+    return Math.min(max, parseInt(localStorage.getItem("layout_cols") || "3", 10));
   });
   const [showLogin, setShowLogin] = useState(false);
   const [loginNotice, setLoginNotice] = useState(false);
@@ -120,7 +120,7 @@ function HomeInner() {
     const picked = hexes.slice(0, 2);
     const lists = await Promise.all(
       picked.map((h) =>
-        supabase.rpc("search_by_color", { search_hex: h, tolerance: 30 }),
+        supabase.rpc("search_by_color", { search_hex: h, tolerance: 100 }),
       ),
     );
     const arrays = lists.map((r) => (r.data as ColorRow[] | null) ?? []);
@@ -129,19 +129,19 @@ function HomeInner() {
     if (arrays.length <= 1) {
       result = arrays[0] ?? [];
     } else {
-      // Keep components present in BOTH results; sort by average matched pct.
-      const [a, b] = arrays;
-      const bIds = new Set(b.map((c) => c.id));
-      result = a
-        .filter((c) => bIds.has(c.id))
+      // Union: show components matching EITHER color. Dedupe by id, then sort by
+      // total matched pct so components hitting both colors rank highest.
+      const byId = new Map<string, ColorRow>();
+      for (const c of [...arrays[0], ...arrays[1]]) {
+        if (!byId.has(c.id)) byId.set(c.id, c);
+      }
+      result = [...byId.values()]
         .map((c) => ({
           c,
-          avg:
-            (matchedPct(c.colors, picked[0]) +
-              matchedPct(c.colors, picked[1])) /
-            2,
+          score:
+            matchedPct(c.colors, picked[0]) + matchedPct(c.colors, picked[1]),
         }))
-        .sort((x, y) => y.avg - x.avg)
+        .sort((x, y) => y.score - x.score)
         .map((x) => x.c);
     }
     setColorSearchResults(result);
@@ -160,22 +160,11 @@ function HomeInner() {
     localStorage.setItem("active_category", activeCategory ?? "website");
   }, [activeCategory]);
 
-  // Persist the column count per context (logos vs the rest) to localStorage.
+  // Persist the single shared column count to localStorage.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const key = activeCategory === "logos" ? "layout_cols_logos" : "layout_cols";
-    localStorage.setItem(key, String(cols));
-  }, [cols, activeCategory]);
-
-  // Load the stored column count for a category (logos keeps its own).
-  const loadColsFor = (id: string | null) => {
-    if (typeof window === "undefined") return;
-    if (id === "logos") {
-      setCols(Math.min(6, parseInt(localStorage.getItem("layout_cols_logos") || "4", 10)));
-    } else {
-      setCols(Math.min(5, parseInt(localStorage.getItem("layout_cols") || "3", 10)));
-    }
-  };
+    localStorage.setItem("layout_cols", String(cols));
+  }, [cols]);
 
   // notice = true when login was triggered by a copy attempt while logged out.
   const openLogin = (notice: boolean) => {
@@ -277,11 +266,11 @@ function HomeInner() {
         onLoginClick={() => openLogin(false)}
         onMenuClick={() => setShowAccount(true)}
         onFilter={(id, filters) => {
-          const switchingContext = (id === "logos") !== (activeCategory === "logos");
           setActiveCategory(id);
           setActiveFilters(filters);
-          // Load the stored column count for the new context (logos vs rest).
-          if (switchingContext) loadColsFor(id);
+          // Column count stays the same across contexts. Non-logos caps at 5,
+          // so only clamp down when leaving logos while at 6.
+          if (id !== "logos") setCols((c) => Math.min(5, c));
         }}
         maxCols={activeCategory === "logos" ? 6 : 5}
         onColorSearch={runColorSearch}
