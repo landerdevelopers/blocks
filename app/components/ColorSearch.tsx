@@ -41,6 +41,11 @@ export default function ColorSearch({
 }) {
   const [open, setOpen] = useState(false);
   const [colors, setColors] = useState<string[]>([]);
+  // Hex currently animating out before it's removed from `colors`.
+  const [removing, setRemoving] = useState<string | null>(null);
+  // On search the picked color becomes a swatch in the preview's exact slot, so
+  // the preview must vanish instantly (no animation). A cancel-close fades it.
+  const [previewInstant, setPreviewInstant] = useState(false);
   const [hue, setHue] = useState(220);
   const [sat, setSat] = useState(0.6);
   const [val, setVal] = useState(0.9);
@@ -154,9 +159,23 @@ export default function ColorSearch({
   const search = () => {
     // Keep at most 2 colors — drop the oldest when full.
     const next = colors.includes(hex) ? colors : [...colors, hex].slice(-2);
+    setPreviewInstant(true); // committed swatch takes the slot → hide preview at once
     setColors(next);
     setOpen(false);
     onSearch?.(next);
+  };
+
+  // Animate the swatch closed (matches the preview close), then commit removal.
+  const removeColor = (c: string) => {
+    if (removing) return;
+    setRemoving(c);
+    setTimeout(() => {
+      const next = colors.filter((x) => x !== c);
+      setColors(next);
+      setRemoving(null);
+      if (next.length === 0) onClear?.();
+      else onSearch?.(next);
+    }, 300);
   };
 
   return (
@@ -173,43 +192,49 @@ export default function ColorSearch({
       </div>
 
       <div className="flex items-center gap-2.5">
-        {/* Add color toggle — hidden once 2 colors are picked */}
-        {colors.length < 2 && (
-          <button
-            ref={buttonRef}
-            type="button"
-            onClick={() => setOpen((o) => !o)}
-            aria-label="Add color"
-            aria-expanded={open}
-            className="relative size-[30px] shrink-0 cursor-pointer"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img alt="" src={imgDashedCircle} className="absolute inset-0 size-full" />
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              alt=""
-              src={imgPlus}
-              className={`absolute left-1/2 top-1/2 size-[18px] -translate-x-1/2 -translate-y-1/2 transition-transform duration-200 ${
-                open ? "rotate-45" : ""
-              }`}
-            />
-          </button>
-        )}
+        {/* Add color toggle — leftmost. Only moves when the preview opens (the
+            group grows). Collapses (hides) once 2 colors are picked. */}
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={() => {
+            setPreviewInstant(false); // re-enable fade for a cancel-close
+            setOpen((o) => !o);
+          }}
+          aria-label="Add color"
+          aria-expanded={open}
+          className={`relative shrink-0 cursor-pointer overflow-hidden transition-all duration-300 ease-out ${
+            colors.length >= 2
+              ? "-mr-2.5 size-0 scale-50 opacity-0"
+              : "size-[30px] scale-100 opacity-100"
+          }`}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img alt="" src={imgDashedCircle} className="absolute inset-0 size-full" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            alt=""
+            src={imgPlus}
+            className={`absolute left-1/2 top-1/2 size-[18px] -translate-x-1/2 -translate-y-1/2 transition-transform duration-200 ${
+              open ? "rotate-45" : ""
+            }`}
+          />
+        </button>
 
-        {/* Selected colors — on the right; hover shows a cross to remove */}
+        {/* Selected colors (oldest→newest). Newest is rightmost — adjacent to
+            the preview — so a searched color grows into the preview's slot.
+            Hover shows a cross to remove (animates out). */}
         {colors.map((c) => (
           <button
             key={c}
             type="button"
-            onClick={() => {
-              const next = colors.filter((x) => x !== c);
-              setColors(next);
-              // Keep results in sync: re-search the rest, or clear if none left.
-              if (next.length === 0) onClear?.();
-              else onSearch?.(next);
-            }}
+            onClick={() => removeColor(c)}
             title={`Remove ${c}`}
-            className="group relative size-[30px] shrink-0 cursor-pointer rounded-full ring-1 ring-inset ring-black/10"
+            className={`group relative shrink-0 cursor-pointer overflow-hidden rounded-full ring-1 ring-inset ring-black/10 transition-all duration-300 ease-out ${
+              removing === c
+                ? "-mr-2.5 size-0 scale-50 opacity-0"
+                : "size-[30px] scale-100 opacity-100"
+            }`}
             style={{ backgroundColor: c }}
           >
             <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/35 opacity-0 transition-opacity group-hover:opacity-100">
@@ -221,18 +246,21 @@ export default function ColorSearch({
           </button>
         ))}
 
-        {/* Live preview of picked color — grows in from the right while picking */}
+        {/* Live preview of picked color — rightmost. On search the new swatch
+            grows into this exact slot while the preview collapses to its right,
+            so the visible circle stays put. */}
         <div
           ref={previewRef}
           aria-hidden
           style={{ backgroundColor: hex }}
           className={`shrink-0 overflow-hidden rounded-full ring-1 ring-inset ring-black/10 ${
+            previewInstant ? "" : "transition-all duration-300 ease-out"
+          } ${
             open
-              ? "size-[30px] scale-100 opacity-100 transition-all duration-300 ease-out"
-              : "-ml-2.5 size-0 scale-50 opacity-0"
+              ? "size-[30px] scale-100 opacity-100"
+              : "-mr-2.5 size-0 scale-50 opacity-0"
           }`}
         />
-
       </div>
 
       {/* Color picker popover — portal'd, fixed, right-aligned, opens upward */}

@@ -125,12 +125,20 @@ alter table public.profiles    enable row level security;
 alter table public.components  enable row level security;
 alter table public.copy_events enable row level security;
 
--- profiles: users may read and update only their own row.
+-- profiles: users may read, insert, and update only their own row.
 drop policy if exists "Profiles: select own" on public.profiles;
 create policy "Profiles: select own"
   on public.profiles
   for select
   using (auth.uid() = id);
+
+-- Insert own row — onboarding upserts the profile when the new-user trigger
+-- hasn't created it yet. Without this, the INSERT path hits RLS.
+drop policy if exists "Profiles: insert own" on public.profiles;
+create policy "Profiles: insert own"
+  on public.profiles
+  for insert
+  with check (auth.uid() = id);
 
 drop policy if exists "Profiles: update own" on public.profiles;
 create policy "Profiles: update own"

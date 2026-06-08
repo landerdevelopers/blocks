@@ -49,17 +49,32 @@ export default function OnboardingModal() {
 
   const nameValid = fullName.trim().length >= 2;
 
+  // Resolve the signed-in user id. Prefer the store profile, but fall back to
+  // the auth user directly — the profile row may still be loading (or its load
+  // failed) while onboarding is already open via the ?onboarding=true redirect.
+  const resolveUid = async (): Promise<string | null> => {
+    if (profile?.id) return profile.id;
+    const { data } = await supabase.auth.getUser();
+    return data.user?.id ?? null;
+  };
+
   // Upload the chosen image to the `avatars` bucket under `{uid}/{filename}`
   // (matches the storage RLS policy) and keep its public URL.
   const onPickAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !profile) return;
+    if (!file) return;
     setError(null);
-    // Instant preview from a local object URL.
+    // Instant preview from a local object URL — independent of the upload.
     setLocalPreview(URL.createObjectURL(file));
+
+    const uid = await resolveUid();
+    if (!uid) {
+      setError("Not signed in. Please retry the login link.");
+      return;
+    }
     setUploading(true);
 
-    const path = `${profile.id}/${Date.now()}-${file.name}`;
+    const path = `${uid}/${Date.now()}-${file.name}`;
     const { error: upErr } = await supabase.storage
       .from("avatars")
       .upload(path, file, { upsert: true });
@@ -77,12 +92,19 @@ export default function OnboardingModal() {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!profile || !nameValid) return;
+    if (!nameValid) return;
     setError(null);
     setSaving(true);
 
+    const uid = await resolveUid();
+    if (!uid) {
+      setSaving(false);
+      setError("Not signed in. Please retry the login link.");
+      return;
+    }
+
     const row = {
-      id: profile.id,
+      id: uid,
       full_name: fullName.trim(),
       avatar_url: avatarUrl,
     };
@@ -120,7 +142,7 @@ export default function OnboardingModal() {
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            className="relative flex size-[88px] cursor-pointer items-center justify-center overflow-hidden rounded-full text-[#ADADAD] transition-colors hover:bg-[#fafafa]"
+            className="group relative flex size-[88px] cursor-pointer items-center justify-center overflow-hidden rounded-full border border-[#E5E5E5] text-[#ADADAD] transition-opacity hover:opacity-70"
             aria-label="Upload profile photo"
           >
             {previewSrc ? (
@@ -129,7 +151,7 @@ export default function OnboardingModal() {
                 alt=""
                 src={previewSrc}
                 referrerPolicy="no-referrer"
-                className="size-full object-cover"
+                className="size-full scale-65 object-cover"
               />
             ) : (
               <>

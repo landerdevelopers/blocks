@@ -519,6 +519,7 @@ export default function UploadForm({
       </div>
 
       {/* Select Colors */}
+      {category !== "Logo" && (
       <div className="mt-6 flex flex-col gap-2.5">
         {colors.length > 0 && (
           <>
@@ -594,6 +595,7 @@ export default function UploadForm({
           </button>
         </div>
       </div>
+      )}
 
       {error && (
         <p className="mt-3 text-sm tracking-[-0.03em] text-[#ef4444]">{error}</p>

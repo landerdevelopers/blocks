@@ -173,7 +173,7 @@ export default function Gallery({
   }, [lightbox]);
 
   // Admin pencil — opens the edit page in a new tab. Slides in from the top.
-  const adminPencil = (id: string) => {
+  const adminPencil = (id: string, dark = false) => {
     if (!isAdmin) return null;
     const k = KBOX[Math.min(6, Math.max(1, cols))] ?? KBOX[3];
     const side = cols === 1 ? "left-3" : "right-3";
@@ -186,7 +186,9 @@ export default function Gallery({
           window.open(`/upload/${id}/edit`, "_blank");
         }}
         style={{ width: k.box, height: k.box }}
-        className={`absolute top-3 ${side} z-30 flex cursor-pointer items-center justify-center rounded-full border border-[#e7e9ee] bg-white text-[#52525b] opacity-0 shadow-[0px_2px_6px_rgba(0,0,0,0.15)] transition-[opacity,translate] duration-300 ease-out -translate-y-[calc(100%+0.75rem)] pointer-events-none group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100`}
+        className={`absolute top-3 ${side} z-30 flex cursor-pointer items-center justify-center rounded-full border opacity-0 shadow-[0px_2px_6px_rgba(0,0,0,0.15)] transition-[opacity,translate] duration-300 ease-out -translate-y-[calc(100%+0.75rem)] pointer-events-none group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 ${
+          dark ? "border-black bg-black text-white" : "border-[#e7e9ee] bg-white text-[#52525b]"
+        }`}
       >
         <Pencil size={k.icon} strokeWidth={2} />
       </button>
@@ -343,9 +345,13 @@ export default function Gallery({
     if (results.length === 0) {
       return (
         <main className="flex h-full flex-1 items-center justify-center rounded-tl-[22px] bg-white p-4">
-          <p className="text-sm tracking-[-0.03em] text-[#71717b]">
-            No components found for this color
-          </p>
+          <div className="flex max-w-md flex-col items-center gap-0 text-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img alt="" src="/NoColor.png" className="size-72 object-contain" />
+            <p className="-mt-3 text-[20px] font-medium tracking-[-0.03em] text-[#09090b]">
+              No blocks found for this color
+            </p>
+          </div>
         </main>
       );
     }
@@ -357,10 +363,11 @@ export default function Gallery({
   if (empty) {
     return (
       <main className="flex h-full flex-1 items-center justify-center rounded-tl-[22px] bg-white p-4">
-        <div className="flex max-w-md flex-col items-center gap-3 text-center">
-          <span className="text-6xl">🪹</span>
-          <p className="text-xl font-medium tracking-[-0.03em] text-[#09090b]">
-            It&apos;s a bit empty in here…
+        <div className="flex max-w-md flex-col items-center gap-0 text-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img alt="" src="/NoColor.png" className="size-72 object-contain" />
+          <p className="-mt-3 text-[20px] font-medium tracking-[-0.03em] text-[#09090b]">
+            No blocks match the selected filter
           </p>
         </div>
         {renderLightbox()}
@@ -399,7 +406,7 @@ export default function Gallery({
                   onMouseLeave={resetAfterLeave}
                   className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
                 >
-                  {adminPencil(c.id)}
+                  {adminPencil(c.id, true)}
                   <div
                     onClick={() =>
                       c.preview_url &&

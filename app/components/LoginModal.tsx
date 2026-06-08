@@ -6,6 +6,7 @@ import { signInWithGoogle, signInWithMagicLink } from "@/lib/auth";
 
 const imgLanderBlack = "/Lander_black.png";
 const imgGoogle = "/Google.png";
+const imgMail = "/Mail.png";
 
 export default function LoginModal({
   open,
@@ -60,6 +61,32 @@ export default function LoginModal({
 
   if (!open || typeof document === "undefined") return null;
 
+  // Magic link sent — dedicated confirmation modal (Mail.png + message).
+  if (sent) {
+    return createPortal(
+      <div
+        onClick={onClose}
+        className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="flex h-fit w-[440px] flex-col items-center gap-1 rounded-2xl bg-white px-12 py-10 text-center shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img alt="" src={imgMail} className="size-[160px] object-contain" />
+          <p className="text-[26px] font-semibold tracking-[-0.03em] text-[#09090b]">
+            Email Sent
+          </p>
+          <p className="text-[16px] leading-6 tracking-[-0.03em] text-[#71717b]">
+            We&apos;ve sent a verification link to your email. Please check your
+            inbox and verify your account.
+          </p>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
   return createPortal(
     <div
       onClick={onClose}
@@ -84,26 +111,7 @@ export default function LoginModal({
           </p>
         </div>
 
-        {sent ? (
-          // Magic link sent — confirmation state.
-          <div className="flex flex-col items-center gap-4 py-3 text-center">
-            <span className="flex size-16 items-center justify-center rounded-full bg-[#eef4ff] ring-8 ring-[#f6f9ff]">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2974ff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <rect x="3" y="5" width="18" height="14" rx="2" />
-                <path d="m3 7 9 6 9-6" />
-              </svg>
-            </span>
-            <div className="flex flex-col gap-1.5">
-              <p className="text-[18px] font-medium tracking-[-0.03em] text-[#09090b]">
-                Check your inbox
-              </p>
-              <p className="text-[14px] leading-5 tracking-[-0.03em] text-[#757575]">
-                We sent a magic link to{" "}
-                <span className="font-medium text-[#09090b]">{email}</span>
-              </p>
-            </div>
-          </div>
-        ) : (
+        {(
           <>
             {/* Notice — shown when a copy was attempted while logged out */}
             {notice && (

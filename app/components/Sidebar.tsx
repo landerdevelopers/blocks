@@ -281,6 +281,12 @@ export default function Sidebar({
   const profile = useAuthStore((s) => s.profile);
   const authLoading = useAuthStore((s) => s.authLoading);
 
+  // `cols` derives from localStorage on the client, so the SSR value differs.
+  // Render the column-split segments only after mount to avoid a hydration
+  // mismatch on their count/rounded classes.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   // Published components — used only to compute the count badges.
   const [comps, setComps] = useState<Comp[]>([]);
   useEffect(() => {
@@ -352,11 +358,11 @@ export default function Sidebar({
                   href="https://lander.studio/"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5"
+                  className="group flex items-center gap-1.5"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img alt="" src={imgVectorLogo} className="h-[13.6px] w-[10.7px]" />
-                  <span className="text-sm font-medium tracking-[-0.03em] text-[#09090b]">
+                  <span className="text-sm font-medium tracking-[-0.03em] text-[#09090b] group-hover:underline">
                     Lander Studio
                   </span>
                 </a>
@@ -395,17 +401,17 @@ export default function Sidebar({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img alt="" src={imgFrame18} className="size-[30px]" />
               </button>
-              {/* Line split into `cols` equal segments */}
-              {/* cols comes from localStorage on the client → suppress SSR mismatch */}
-              <div className="flex flex-1 items-center gap-1" suppressHydrationWarning>
-                {Array.from({ length: cols }).map((_, i) => (
-                  <div
-                    key={i}
-                    className={`h-[30px] flex-1 bg-[#efeff0] ${
-                      i === 0 ? "rounded-l-lg" : ""
-                    } ${i === cols - 1 ? "rounded-r-lg" : ""}`}
-                  />
-                ))}
+              {/* Line split into `cols` equal segments — client-only (see mounted). */}
+              <div className="flex flex-1 items-center gap-1">
+                {mounted &&
+                  Array.from({ length: cols }).map((_, i) => (
+                    <div
+                      key={i}
+                      className={`h-[30px] flex-1 bg-[#efeff0] ${
+                        i === 0 ? "rounded-l-lg" : ""
+                      } ${i === cols - 1 ? "rounded-r-lg" : ""}`}
+                    />
+                  ))}
               </div>
               <button
                 type="button"
@@ -441,7 +447,7 @@ export default function Sidebar({
                 alt=""
                 src={profile.avatar_url}
                 referrerPolicy="no-referrer"
-                className="size-[30px] rounded-full object-cover"
+                className="size-[30px] shrink-0 rounded-full object-cover"
               />
             ) : (
               <div className="flex size-[30px] items-center justify-center rounded-full bg-[#09090b] text-sm font-medium text-white">
