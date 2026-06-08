@@ -195,7 +195,8 @@ export default function Gallery({
   const adminPencil = (id: string, dark = false) => {
     if (!isAdmin) return null;
     const k = KBOX[Math.min(6, Math.max(1, cols))] ?? KBOX[3];
-    const side = cols === 1 ? "left-3" : "right-3";
+    const side = cols === 1 ? "left-5" : "right-3";
+    const top = cols === 1 ? "top-5" : "top-3";
     return (
       <button
         type="button"
@@ -205,7 +206,7 @@ export default function Gallery({
           window.open(`/upload/${id}/edit`, "_blank");
         }}
         style={{ width: k.box, height: k.box }}
-        className={`absolute top-3 ${side} z-30 flex cursor-pointer items-center justify-center rounded-full border opacity-0 shadow-[0px_2px_6px_rgba(0,0,0,0.15)] transition-[opacity,translate] duration-300 ease-out -translate-y-[calc(100%+0.75rem)] pointer-events-none group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 ${
+        className={`absolute ${top} ${side} z-30 flex cursor-pointer items-center justify-center rounded-full border opacity-0 shadow-[0px_2px_6px_rgba(0,0,0,0.15)] transition-[opacity,translate] duration-300 ease-out -translate-y-[calc(100%+0.75rem)] pointer-events-none group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 ${
           dark ? "border-black bg-black text-white" : "border-[#e7e9ee] bg-white text-[#52525b]"
         }`}
       >

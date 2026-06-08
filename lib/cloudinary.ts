@@ -34,5 +34,10 @@ export async function uploadToCloudinary(file: File): Promise<CloudinaryUpload> 
 // Cloudinary URL. No-op for non-Cloudinary URLs.
 export function cloudinaryOptimize(url: string): string {
   if (!url || !url.includes('cloudinary.com')) return url
-  return url.replace('/upload/', '/upload/w_800,q_auto,f_auto/')
+  // w_1200 + dpr_2.0 keeps cards crisp on retina / large layouts; c_limit avoids
+  // upscaling past the original; q_auto:good + f_auto keep the payload reasonable.
+  return url.replace(
+    '/upload/',
+    '/upload/w_1200,c_limit,dpr_2.0,q_auto:good,f_auto/',
+  )
 }
