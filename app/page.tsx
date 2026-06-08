@@ -21,6 +21,7 @@ type ColorRow = {
   filters: string[] | null;
   figma_url: string | null;
   preview_url: string | null;
+  aspect_ratio: number | null;
   colors: { hex: string; pct: number | null }[] | null;
 };
 
@@ -91,7 +92,9 @@ function HomeInner() {
     // at 5 — clamp the stored value to the active context's max before paint.
     const cat = localStorage.getItem("active_category") || "website";
     const max = cat === "logos" ? 6 : 5;
-    return Math.min(max, parseInt(localStorage.getItem("layout_cols") || "3", 10));
+    const min = cat === "logos" ? 2 : 1;
+    const stored = parseInt(localStorage.getItem("layout_cols") || "3", 10);
+    return Math.min(max, Math.max(min, stored));
   });
   const [showLogin, setShowLogin] = useState(false);
   const [loginNotice, setLoginNotice] = useState(false);
@@ -112,18 +115,31 @@ function HomeInner() {
   const [colorSearchResults, setColorSearchResults] = useState<
     ColorRow[] | null
   >(null);
+  // Remember the picked colors so the search can re-run when the section changes.
+  const [colorHexes, setColorHexes] = useState<string[]>([]);
 
   const runColorSearch = async (hexes: string[]) => {
+    setColorHexes(hexes);
     setColorSearchActive(true);
     setColorSearchLoading(true);
     const supabase = createClient();
     const picked = hexes.slice(0, 2);
+    // Restrict results to the active section's category.
+    const CAT_MAP: Record<string, string> = {
+      website: "Website",
+      mobile: "Mobile Apps",
+      dashboard: "Dashboard",
+      logos: "Logos",
+    };
+    const dbCat = CAT_MAP[activeCategory ?? "website"];
     const lists = await Promise.all(
       picked.map((h) =>
-        supabase.rpc("search_by_color", { search_hex: h, tolerance: 100 }),
+        supabase.rpc("search_by_color", { search_hex: h, tolerance: 60 }),
       ),
     );
-    const arrays = lists.map((r) => (r.data as ColorRow[] | null) ?? []);
+    const arrays = lists.map((r) =>
+      ((r.data as ColorRow[] | null) ?? []).filter((c) => c.category === dbCat),
+    );
 
     let result: ColorRow[];
     if (arrays.length <= 1) {
@@ -152,7 +168,15 @@ function HomeInner() {
     setColorSearchActive(false);
     setColorSearchResults(null);
     setColorSearchLoading(false);
+    setColorHexes([]);
   };
+
+  // Re-run the active color search whenever the section changes, so results
+  // reflect the newly opened section instead of staying stale.
+  useEffect(() => {
+    if (colorSearchActive && colorHexes.length) runColorSearch(colorHexes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCategory]);
 
   // Persist the active category so it's known synchronously on next load.
   useEffect(() => {
@@ -269,10 +293,13 @@ function HomeInner() {
           setActiveCategory(id);
           setActiveFilters(filters);
           // Column count stays the same across contexts. Non-logos caps at 5,
-          // so only clamp down when leaving logos while at 6.
+          // so only clamp down when leaving logos while at 6. Logos has a min
+          // of 2, so clamp up when entering it at 1.
           if (id !== "logos") setCols((c) => Math.min(5, c));
+          else setCols((c) => Math.max(2, c));
         }}
         maxCols={activeCategory === "logos" ? 6 : 5}
+        minCols={activeCategory === "logos" ? 2 : 1}
         onColorSearch={runColorSearch}
         onColorClear={clearColorSearch}
       />

@@ -21,6 +21,7 @@ export type GalleryComponent = {
   filters: string[] | null;
   figma_url: string | null;
   preview_url: string | null;
+  aspect_ratio: number | null;
 };
 
 type AuthState = {

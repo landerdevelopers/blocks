@@ -128,6 +128,7 @@ function resolveWeights(colors: ColorWeight[]): number[] {
 // Shape used to pre-fill the form when editing an existing component.
 export type UploadInitialValues = {
   previewUrl?: string | null;
+  aspectRatio?: number | null;
   figmaUrl?: string | null;
   category?: string | null; // DB category value
   section?: string | null;
@@ -143,6 +144,7 @@ export type SavedComponent = {
   filters: string[] | null;
   figma_url: string | null;
   preview_url: string | null;
+  aspect_ratio: number | null;
   colors: { hex: string; pct: number | null }[] | null;
   [key: string]: unknown;
 };
@@ -202,6 +204,9 @@ export default function UploadForm({
   const [file, setFile] = useState<File | null>(null);
   const [existingPreview, setExistingPreview] = useState<string | null>(
     initialValues?.previewUrl ?? null,
+  );
+  const [existingAspect, setExistingAspect] = useState<number | null>(
+    initialValues?.aspectRatio ?? null,
   );
   const [dragOver, setDragOver] = useState(false);
   const [category, setCategory] = useState<Category>(
@@ -304,9 +309,14 @@ export default function UploadForm({
     setError(null);
     setSaving(true);
     try {
-      // Keep the existing preview unless a new file was chosen.
+      // Keep the existing preview/aspect unless a new file was chosen.
       let preview_url = existingPreview;
-      if (file) preview_url = await uploadToCloudinary(file);
+      let aspect_ratio = existingAspect;
+      if (file) {
+        const up = await uploadToCloudinary(file);
+        preview_url = up.url;
+        aspect_ratio = up.aspectRatio;
+      }
 
       const dbColors = colors.map((c, i) => ({ hex: c.hex, pct: weights[i] }));
       const payload = {
@@ -315,6 +325,7 @@ export default function UploadForm({
         filters: [...filters],
         figma_url: figma,
         preview_url,
+        aspect_ratio,
         colors: dbColors,
       };
 
@@ -330,7 +341,10 @@ export default function UploadForm({
         setError(dbErr.message);
         return;
       }
-      if (file && data?.preview_url) setExistingPreview(data.preview_url);
+      if (file && data?.preview_url) {
+        setExistingPreview(data.preview_url);
+        setExistingAspect((data as SavedComponent).aspect_ratio ?? null);
+      }
       // New uploads prepend to the shared gallery list — instant homepage update.
       if (!componentId && data) {
         const c = data as SavedComponent;
@@ -341,6 +355,7 @@ export default function UploadForm({
           filters: c.filters,
           figma_url: c.figma_url,
           preview_url: c.preview_url,
+          aspect_ratio: c.aspect_ratio,
         } as GalleryComponent);
       }
       onSuccess?.(data as SavedComponent);

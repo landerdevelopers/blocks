@@ -2,13 +2,12 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Plus } from "lucide-react";
 
 const POP_W = 225;
 
 // Asset URLs sourced from Figma (remote, expire ~7 days).
 const imgPalette = "https://www.figma.com/api/mcp/asset/40efe4f1-8196-4315-a479-834937cbd0b3";
-const imgDashedCircle = "https://www.figma.com/api/mcp/asset/1c1615e2-d955-4371-9dc7-c751bdcb18e1";
-const imgPlus = "https://www.figma.com/api/mcp/asset/7b313401-6eb4-4cb5-b3d9-c6347f4d5850";
 
 function hsvToHex(h: number, s: number, v: number) {
   const c = v * s;
@@ -46,6 +45,31 @@ export default function ColorSearch({
   // On search the picked color becomes a swatch in the preview's exact slot, so
   // the preview must vanish instantly (no animation). A cancel-close fades it.
   const [previewInstant, setPreviewInstant] = useState(false);
+  // Popover open/close animation. `popMounted` keeps it in the DOM through the
+  // close transition; `shown` drives the opacity/scale and is toggled a frame
+  // after mount so the enter transition actually runs.
+  const [popMounted, setPopMounted] = useState(false);
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setPopMounted(true);
+      // Double rAF: let the closed state (opacity 0 / scale 0.96) paint once,
+      // then flip `shown` so the enter transition runs instead of snapping.
+      let r2 = 0;
+      const r1 = requestAnimationFrame(() => {
+        r2 = requestAnimationFrame(() => setShown(true));
+      });
+      return () => {
+        cancelAnimationFrame(r1);
+        cancelAnimationFrame(r2);
+      };
+    }
+    setShown(false);
+    if (popMounted) {
+      const t = setTimeout(() => setPopMounted(false), 200);
+      return () => clearTimeout(t);
+    }
+  }, [open, popMounted]);
   const [hue, setHue] = useState(220);
   const [sat, setSat] = useState(0.6);
   const [val, setVal] = useState(0.9);
@@ -209,13 +233,20 @@ export default function ColorSearch({
               : "size-[30px] scale-100 opacity-100"
           }`}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img alt="" src={imgDashedCircle} className="absolute inset-0 size-full" />
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            alt=""
-            src={imgPlus}
-            className={`absolute left-1/2 top-1/2 size-[18px] -translate-x-1/2 -translate-y-1/2 transition-transform duration-200 ${
+          <svg className="absolute inset-0 size-full" viewBox="0 0 30 30" fill="none" aria-hidden>
+            <circle
+              cx="15"
+              cy="15"
+              r="14"
+              stroke="#ADADAD"
+              strokeWidth="1"
+              strokeDasharray="4 4"
+            />
+          </svg>
+          <Plus
+            size={19}
+            strokeWidth={1.25}
+            className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[#ADADAD] transition-transform duration-200 ${
               open ? "rotate-45" : ""
             }`}
           />
@@ -264,7 +295,7 @@ export default function ColorSearch({
       </div>
 
       {/* Color picker popover — portal'd, fixed, right-aligned, opens upward */}
-      {open &&
+      {popMounted &&
         typeof document !== "undefined" &&
         createPortal(
           <div
@@ -272,9 +303,11 @@ export default function ColorSearch({
             style={{
               left: coords?.left ?? 0,
               top: coords?.top ?? 0,
-              opacity: coords ? 1 : 0,
+              opacity: coords && shown ? 1 : 0,
+              transform: shown ? "scale(1)" : "scale(0.96)",
+              transformOrigin: "bottom right",
             }}
-            className="fixed z-[1000] w-[225px] rounded-xl border border-[#e7e9ee] bg-white p-1.5 shadow-[0px_8px_24px_rgba(0,0,0,0.12)]"
+            className="fixed z-[1000] w-[225px] rounded-xl border border-[#e7e9ee] bg-white p-1.5 shadow-[0px_8px_24px_rgba(0,0,0,0.12)] transition-[opacity,transform] duration-200 ease-out"
           >
             {/* Tip pointing down at the active color preview */}
             <div

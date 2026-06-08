@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ChevronDown, Plus, Minus } from "lucide-react";
 import ColorSearch from "./ColorSearch";
 import { useAuthStore } from "@/store/authStore";
 import { createClient } from "@/lib/supabase/client";
@@ -21,9 +22,6 @@ type Comp = {
 
 // Asset URLs sourced from Figma (remote, expire ~7 days).
 const imgVectorLogo = "https://www.figma.com/api/mcp/asset/e43c5089-51a7-45fe-8bd2-b63a7d3b1c34";
-const imgChevron = "https://www.figma.com/api/mcp/asset/2401c95e-2724-4fe3-99a8-f415d4777424";
-const imgFrame18 = "https://www.figma.com/api/mcp/asset/12d1c520-3a0f-49a4-a98b-8c3cdbff12bd";
-const imgGroup17 = "https://www.figma.com/api/mcp/asset/5c7f3a9d-8975-4483-b2dd-5ee67b1ba104";
 const imgLoginUser = "https://www.figma.com/api/mcp/asset/bd04080a-ebbb-4c22-b15b-9d6f989a987b";
 const imgLoginArrow = "https://www.figma.com/api/mcp/asset/e2316c41-86b0-444b-a898-f01386376988";
 
@@ -162,12 +160,11 @@ function SectionCard({
           ({catComps.length})
         </span>
       </div>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        alt=""
-        src={imgChevron}
-        className={`size-[18px] transition-transform duration-300 ${
-          open ? "-scale-y-100" : ""
+      <ChevronDown
+        size={18}
+        strokeWidth={1.5}
+        className={`text-[#71717b] transition-transform duration-300 ${
+          open ? "rotate-180" : ""
         }`}
       />
     </button>
@@ -261,6 +258,7 @@ export default function Sidebar({
   cols,
   onColsChange,
   maxCols = 5,
+  minCols = 1,
   loggedIn,
   onLoginClick,
   onMenuClick,
@@ -271,6 +269,7 @@ export default function Sidebar({
   cols: number;
   onColsChange: (n: number) => void;
   maxCols?: number;
+  minCols?: number;
   loggedIn: boolean;
   onLoginClick: () => void;
   onMenuClick: () => void;
@@ -393,35 +392,44 @@ export default function Sidebar({
             <div className="flex w-full items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => onColsChange(Math.max(1, cols - 1))}
-                disabled={cols <= 1}
+                onClick={() => onColsChange(Math.max(minCols, cols - 1))}
+                disabled={mounted && cols <= minCols}
                 aria-label="Fewer columns"
-                className="shrink-0 cursor-pointer disabled:cursor-default disabled:opacity-40"
+                className="flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-[#09090b] text-white disabled:cursor-default disabled:opacity-40"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img alt="" src={imgFrame18} className="size-[30px]" />
+                <Minus size={20} strokeWidth={1.25} />
               </button>
-              {/* Line split into `cols` equal segments — client-only (see mounted). */}
-              <div className="flex flex-1 items-center gap-1">
+              {/* Line split into `cols` equal segments. Always render the max (6)
+                  segments and transition each one's flex-grow/margin, so the bar
+                  smoothly redistributes width when the layout changes instead of
+                  snapping. Client-only (see mounted). */}
+              <div className="flex flex-1 items-center">
                 {mounted &&
-                  Array.from({ length: cols }).map((_, i) => (
-                    <div
-                      key={i}
-                      className={`h-[30px] flex-1 bg-[#efeff0] ${
-                        i === 0 ? "rounded-l-lg" : ""
-                      } ${i === cols - 1 ? "rounded-r-lg" : ""}`}
-                    />
-                  ))}
+                  Array.from({ length: 6 }).map((_, i) => {
+                    const active = i < cols;
+                    return (
+                      <div
+                        key={i}
+                        style={{
+                          flexGrow: active ? 1 : 0,
+                          opacity: active ? 1 : 0,
+                          marginLeft: active && i > 0 ? 4 : 0,
+                        }}
+                        className={`h-[30px] flex-shrink basis-0 bg-[#efeff0] transition-all duration-300 ease-out ${
+                          i === 0 ? "rounded-l-lg" : ""
+                        } ${i === cols - 1 ? "rounded-r-lg" : ""}`}
+                      />
+                    );
+                  })}
               </div>
               <button
                 type="button"
                 onClick={() => onColsChange(Math.min(maxCols, cols + 1))}
-                disabled={cols >= maxCols}
+                disabled={mounted && cols >= maxCols}
                 aria-label="More columns"
-                className="flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-[#09090b] p-1 disabled:cursor-default disabled:opacity-40"
+                className="flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-[#09090b] text-white disabled:cursor-default disabled:opacity-40"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img alt="" src={imgGroup17} className="size-[13.5px]" />
+                <Plus size={20} strokeWidth={1.25} />
               </button>
             </div>
           </div>
@@ -439,8 +447,13 @@ export default function Sidebar({
           <div className="h-4 w-24 animate-pulse rounded-full bg-[#ebebef]" />
         </div>
       ) : loggedIn ? (
-        <div className="mt-2.5 flex w-full shrink-0 items-center justify-between rounded-lg border border-[#e7e9ee] bg-white px-3 py-2">
-          <div className="flex items-center gap-2">
+        <div className="mt-2.5 flex w-full shrink-0 items-center justify-between rounded-[10px] border border-[#e7e9ee] bg-white px-3 py-2">
+          <button
+            type="button"
+            onClick={onMenuClick}
+            aria-label="Open profile"
+            className="flex cursor-pointer items-center gap-2"
+          >
             {profile?.avatar_url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -457,7 +470,7 @@ export default function Sidebar({
             <span className="text-base font-medium tracking-[-0.03em] text-[#09090b]">
               {profile?.full_name ?? "Account"}
             </span>
-          </div>
+          </button>
           <button
             type="button"
             onClick={onMenuClick}
@@ -471,7 +484,7 @@ export default function Sidebar({
         <button
           type="button"
           onClick={onLoginClick}
-          className="mt-2.5 flex w-full shrink-0 cursor-pointer items-center justify-between rounded-lg border border-[#e7e9ee] bg-[rgba(123,113,113,0.05)] px-3 py-2 transition-colors hover:bg-[rgba(123,113,113,0.08)]"
+          className="mt-2.5 flex w-full shrink-0 cursor-pointer items-center justify-between rounded-[10px] border border-[#e7e9ee] bg-[rgba(123,113,113,0.05)] px-3 py-2 transition-colors hover:bg-[rgba(123,113,113,0.08)]"
         >
           <div className="flex items-center gap-2">
             {/* eslint-disable-next-line @next/next/no-img-element */}

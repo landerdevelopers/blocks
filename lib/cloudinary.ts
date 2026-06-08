@@ -1,6 +1,13 @@
+export type CloudinaryUpload = {
+  url: string;
+  // width / height; null if the response omits dimensions.
+  aspectRatio: number | null;
+};
+
 // Unsigned Cloudinary upload from the browser. Requires a cloud name and an
-// unsigned upload preset configured in the Cloudinary dashboard.
-export async function uploadToCloudinary(file: File): Promise<string> {
+// unsigned upload preset configured in the Cloudinary dashboard. Returns the
+// secure URL plus the image aspect ratio (from the response width/height).
+export async function uploadToCloudinary(file: File): Promise<CloudinaryUpload> {
   const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
   const preset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
   if (!cloudName || !preset) {
@@ -18,5 +25,14 @@ export async function uploadToCloudinary(file: File): Promise<string> {
   if (!res.ok) throw new Error("Cloudinary upload failed.");
 
   const data = await res.json();
-  return data.secure_url as string;
+  const aspectRatio =
+    data.width && data.height ? data.width / data.height : null;
+  return { url: data.secure_url as string, aspectRatio };
+}
+
+// Apply on-the-fly transforms (width cap, auto quality/format) to a stored
+// Cloudinary URL. No-op for non-Cloudinary URLs.
+export function cloudinaryOptimize(url: string): string {
+  if (!url || !url.includes('cloudinary.com')) return url
+  return url.replace('/upload/', '/upload/w_800,q_auto,f_auto/')
 }

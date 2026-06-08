@@ -6,6 +6,7 @@ import { Pencil } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 import { readComponentsCache } from "@/lib/componentsCache";
+import { cloudinaryOptimize } from "@/lib/cloudinary";
 
 type Component = GalleryComponent;
 
@@ -95,7 +96,7 @@ export default function Gallery({
     let alive = true;
     createClient()
       .from("components")
-      .select("id, category, section, filters, figma_url, preview_url")
+      .select("id, category, section, filters, figma_url, preview_url, aspect_ratio")
       .eq("is_published", true)
       .order("created_at", { ascending: false })
       .then(({ data }) => {
@@ -113,6 +114,12 @@ export default function Gallery({
       alive = false;
     };
   }, [setComponents]);
+
+  // Preload the copied-state icon so the figma→tick swap doesn't flash/break.
+  useEffect(() => {
+    const img = new Image();
+    img.src = "/Tick.png";
+  }, []);
 
   const dbCategory = category ? CAT_MAP[category] : null;
   const isLogos = dbCategory === "Logos";
@@ -148,7 +155,19 @@ export default function Gallery({
 
   const cfg = BTN[Math.min(6, Math.max(1, cols))] ?? BTN[3];
 
+  // Hover overlay behind the copy button. The 1-col layout shows the button at
+  // the top, every other layout at the bottom — so flip the gradient to match.
+  const overlayCls = `pointer-events-none absolute inset-x-0 z-5 h-24 opacity-0 transition-opacity duration-300 group-hover:opacity-100 ${
+    cfg.pos === "tr"
+      ? "top-0 bg-linear-to-b from-black/70 to-transparent"
+      : "bottom-0 bg-linear-to-t from-black/70 to-transparent"
+  }`;
+
   const [copied, setCopied] = useState<string | null>(null);
+  // Ids whose preview image has finished loading — drives the placeholder fade.
+  const [loadedIds, setLoadedIds] = useState<Set<string>>(new Set());
+  const markLoaded = (id: string) =>
+    setLoadedIds((prev) => new Set(prev).add(id));
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markCopied = (key: string) => {
     if (timer.current) clearTimeout(timer.current);
@@ -195,62 +214,95 @@ export default function Gallery({
     );
   };
 
-  // Copy button — shared by both views; `dark` for the logo cards.
+  // Copy button — shared by both views; `dark` for the logo cards. Two stacked
+  // pills anchored at the same spot: on copy the "Copy to Figma" pill slides
+  // down + fades out while the "Copied!" pill rises up into its place.
   const copyButton = (id: string, dark: boolean, figmaUrl: string | null) => {
     const isCopied = copied === id;
+    const onClick = async () => {
+      if (authLoading) return; // wait for the session to resolve
+      if (!loggedIn) return onRequireLogin();
+      if (!onCopy(id)) return;
+      if (figmaUrl) {
+        try {
+          await navigator.clipboard.writeText(figmaUrl);
+        } catch {
+          // clipboard may be blocked; still show the copied state
+        }
+      }
+      markCopied(id);
+    };
+
+    const pill =
+      "flex items-center justify-center whitespace-nowrap border font-medium tracking-[-0.03em] shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,transform] duration-300 ease-out";
+
     return (
-      <button
-        type="button"
-        onClick={async () => {
-          if (authLoading) return; // wait for the session to resolve
-          if (!loggedIn) return onRequireLogin();
-          if (!onCopy(id)) return;
-          if (figmaUrl) {
-            try {
-              await navigator.clipboard.writeText(figmaUrl);
-            } catch {
-              // clipboard may be blocked; still show the copied state
-            }
-          }
-          markCopied(id);
-        }}
-        style={{
-          width: isCopied ? cfg.cw : cfg.w,
-          height: isCopied ? cfg.ch : cfg.h,
-          borderRadius: cfg.r,
-          fontSize: cfg.fs,
-          ...(isCopied
-            ? { backgroundColor: "#deffd7", color: "#1C9A00", borderColor: "#BAFFAA" }
-            : {}),
-        }}
-        className={`pointer-events-none absolute z-10 flex cursor-crosshair items-center justify-center whitespace-nowrap border font-medium tracking-[-0.03em] opacity-0 shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,translate] duration-300 ease-out group-hover:pointer-events-auto group-hover:opacity-100 ${cfg.gap} ${
-          dark ? "border-black bg-black text-white" : "border-[#e7e9ee] bg-white text-[#09090b]"
-        } ${
+      // Wrapper: positioned per layout + slides in on card hover.
+      <div
+        className={`pointer-events-none absolute z-10 opacity-0 transition-[opacity,translate] duration-300 ease-out group-hover:opacity-100 ${
           cfg.pos === "tr"
             ? "right-6 top-6 -translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
             : "bottom-6 left-1/2 -translate-x-1/2 translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
         }`}
       >
-        {authLoading ? (
-          <>
-            <span
-              className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
-              style={{ width: cfg.img, height: cfg.img }}
-            />
-            Loading…
-          </>
-        ) : (
-          <>
+        <div className="relative">
+          {/* Copy pill — in flow, sizes the wrapper. Slides down + out on copy. */}
+          <button
+            type="button"
+            onClick={onClick}
+            style={{
+              width: cfg.w,
+              height: cfg.h,
+              borderRadius: cfg.r,
+              fontSize: cfg.fs,
+              transform: isCopied ? "translateY(14px)" : "translateY(0)",
+              opacity: isCopied ? 0 : 1,
+            }}
+            className={`${pill} ${cfg.gap} cursor-pointer ${
+              isCopied ? "pointer-events-none" : "group-hover:pointer-events-auto"
+            } ${dark ? "border-black bg-black text-white" : "border-[#e7e9ee] bg-white text-[#09090b]"}`}
+          >
+            {authLoading ? (
+              <>
+                <span
+                  className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+                  style={{ width: cfg.img, height: cfg.img }}
+                />
+                Loading…
+              </>
+            ) : (
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img alt="" src="/figma.png" style={{ width: cfg.img, height: cfg.img }} />
+                Copy to Figma
+              </>
+            )}
+          </button>
+
+          {/* Copied pill — absolutely centered over the copy pill. Rises up + in. */}
+          <div
+            aria-hidden={!isCopied}
+            style={{
+              width: cfg.cw,
+              height: cfg.ch,
+              borderRadius: cfg.r,
+              fontSize: cfg.fs,
+              backgroundColor: "#deffd7",
+              color: "#1C9A00",
+              borderColor: "#BAFFAA",
+              top: "50%",
+              left: "50%",
+              transform: `translate(-50%, ${isCopied ? "-50%" : "calc(-50% + 14px)"})`,
+              opacity: isCopied ? 1 : 0,
+            }}
+            className={`${pill} ${cfg.gap} pointer-events-none absolute`}
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              alt=""
-              src={isCopied ? "/Tick.png" : "/figma.png"}
-              style={{ width: cfg.img, height: cfg.img }}
-            />
-            {isCopied ? "Copied Successfully!" : "Copy to Figma"}
-          </>
-        )}
-      </button>
+            <img alt="" src="/Tick.png" style={{ width: cfg.img, height: cfg.img }} />
+            {cols >= 5 ? "Copied!" : "Copied Successfully!"}
+          </div>
+        </div>
+      </div>
     );
   };
 
@@ -276,14 +328,21 @@ export default function Gallery({
                   <line x1="18" y1="6" x2="6" y2="18" />
                 </svg>
               </button>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                alt=""
-                src={lightbox.src}
-                className={`block max-h-[85vh] max-w-[90vw] rounded-xl object-contain shadow-[0px_12px_40px_rgba(0,0,0,0.4)] ${
-                  lightbox.logo ? "bg-white p-16" : ""
-                }`}
-              />
+              {lightbox.logo ? (
+                // Fixed square box so every logo opens at the same size (no
+                // per-logo sizing or blank-then-resize jump).
+                <div className="flex size-[min(90vw,520px)] items-center justify-center rounded-xl bg-white p-16 shadow-[0px_12px_40px_rgba(0,0,0,0.4)]">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img alt="" src={lightbox.src} className="size-full object-contain" />
+                </div>
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  alt=""
+                  src={lightbox.src}
+                  className="block max-h-[85vh] max-w-[90vw] rounded-xl object-contain shadow-[0px_12px_40px_rgba(0,0,0,0.4)]"
+                />
+              )}
             </div>
           </div>,
           document.body,
@@ -301,7 +360,7 @@ export default function Gallery({
       <main suppressHydrationWarning className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
         {buckets.map((col, i) => (
           <div key={i} className="flex flex-1 flex-col gap-3.5">
-            {col.map((c) => (
+            {col.map((c, j) => (
               <div
                 key={c.id}
                 onMouseLeave={resetAfterLeave}
@@ -313,14 +372,30 @@ export default function Gallery({
                     c.preview_url &&
                     setLightbox({ src: c.preview_url, logo: false })
                   }
-                  className="w-full cursor-pointer overflow-hidden rounded-md border border-[#e7e9ee]"
+                  className="relative w-full cursor-zoom-in overflow-hidden rounded-md border border-[#e7e9ee]"
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    alt=""
-                    src={c.preview_url ?? ""}
-                    className="block h-auto w-full rounded-md object-cover"
-                  />
+                  <div
+                    className={`relative w-full overflow-hidden rounded-md bg-[#e4e4e7] ${
+                      loadedIds.has(c.id) ? "" : "animate-pulse"
+                    }`}
+                    style={{
+                      paddingBottom: c.aspect_ratio
+                        ? `${(1 / c.aspect_ratio) * 100}%`
+                        : "75%",
+                    }}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      alt=""
+                      src={cloudinaryOptimize(c.preview_url ?? "")}
+                      loading={j === 0 ? "eager" : "lazy"}
+                      onLoad={() => markLoaded(c.id)}
+                      className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-500 ${
+                        loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
+                      }`}
+                    />
+                  </div>
+                  <span className={overlayCls} />
                 </div>
                 {copyButton(c.id, false, c.figma_url)}
               </div>
@@ -358,7 +433,7 @@ export default function Gallery({
     return renderGrid(results);
   }
 
-  const empty = filtered.length === 0;
+  const empty = componentsLoaded && filtered.length === 0;
 
   if (empty) {
     return (
@@ -400,7 +475,7 @@ export default function Gallery({
               className="grid gap-3.5"
               style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
             >
-              {items.map((c) => (
+              {items.map((c, idx) => (
                 <div
                   key={c.id}
                   onMouseLeave={resetAfterLeave}
@@ -412,7 +487,7 @@ export default function Gallery({
                       c.preview_url &&
                       setLightbox({ src: c.preview_url, logo: true })
                     }
-                    className="flex w-full cursor-pointer items-center justify-center overflow-hidden rounded-md border border-[#e7e9ee] bg-white"
+                    className="relative flex w-full cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-[#e7e9ee] bg-white"
                     style={{
                       aspectRatio:
                         n >= 6 ? "3 / 4" : n >= 5 ? "4 / 5" : n >= 3 ? "1 / 1" : "5 / 4",
@@ -420,11 +495,19 @@ export default function Gallery({
                         n >= 6 ? 16 : n >= 5 ? 24 : n >= 4 ? 32 : n >= 3 ? 48 : 72,
                     }}
                   >
+                    {/* Placeholder fills the whole card (ignores padding). */}
+                    {!loadedIds.has(c.id) && (
+                      <span className="absolute inset-0 animate-pulse bg-[#e4e4e7]" />
+                    )}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       alt=""
-                      src={c.preview_url ?? ""}
-                      className="size-full object-contain"
+                      src={cloudinaryOptimize(c.preview_url ?? "")}
+                      loading={idx < n ? "eager" : "lazy"}
+                      onLoad={() => markLoaded(c.id)}
+                      className={`size-full object-contain transition-opacity duration-500 ${
+                        loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
+                      }`}
                     />
                   </div>
                   {copyButton(c.id, true, c.figma_url)}
@@ -448,7 +531,7 @@ export default function Gallery({
     <main suppressHydrationWarning className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
       {buckets.map((col, i) => (
         <div key={i} className="flex flex-1 flex-col gap-3.5">
-          {col.map((c) => (
+          {col.map((c, j) => (
             <div
               key={c.id}
               onMouseLeave={resetAfterLeave}
@@ -460,14 +543,30 @@ export default function Gallery({
                   c.preview_url &&
                   setLightbox({ src: c.preview_url, logo: false })
                 }
-                className="w-full cursor-pointer overflow-hidden rounded-md border border-[#e7e9ee]"
+                className="relative w-full cursor-zoom-in overflow-hidden rounded-md border border-[#e7e9ee]"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  alt=""
-                  src={c.preview_url ?? ""}
-                  className="block h-auto w-full rounded-md object-cover"
-                />
+                <div
+                  className={`relative w-full overflow-hidden rounded-md bg-[#e4e4e7] ${
+                    loadedIds.has(c.id) ? "" : "animate-pulse"
+                  }`}
+                  style={{
+                    paddingBottom: c.aspect_ratio
+                      ? `${(1 / c.aspect_ratio) * 100}%`
+                      : "75%",
+                  }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    alt=""
+                    src={cloudinaryOptimize(c.preview_url ?? "")}
+                    loading={j === 0 ? "eager" : "lazy"}
+                    onLoad={() => markLoaded(c.id)}
+                    className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-500 ${
+                      loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+                </div>
+                <span className={overlayCls} />
               </div>
               {copyButton(c.id, false, c.figma_url)}
             </div>

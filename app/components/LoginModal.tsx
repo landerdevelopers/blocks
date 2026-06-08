@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { signInWithGoogle, signInWithMagicLink } from "@/lib/auth";
+import { Input } from "@/components/ui/input";
 
 const imgLanderBlack = "/Lander_black.png";
 const imgGoogle = "/Google.png";
@@ -125,13 +126,12 @@ export default function LoginModal({
               <label className="text-[14px] font-medium tracking-[-0.03em] text-[#09090b]">
                 Email
               </label>
-              <input
+              <Input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && sendMagicLink()}
                 placeholder="m@example.com"
-                className="w-full rounded-lg border border-[#E5E5E5] px-3 py-2.5 text-[14px] tracking-[-0.03em] text-black outline-none placeholder:text-[#757575] focus:border-[#2974ff]"
               />
             </div>
 

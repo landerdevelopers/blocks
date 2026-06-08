@@ -31,6 +31,9 @@ create table if not exists public.components (
   -- preview_url: a Cloudinary URL for the preview image (no Supabase Storage
   --              bucket is used for previews).
   preview_url  text,
+  -- aspect_ratio: width / height of the preview image, used to reserve exact
+  --               space (padding-bottom trick) before the image loads.
+  aspect_ratio numeric,
   -- Array of objects, e.g. [{"hex": "#3B82F6", "pct": 60}]
   colors       jsonb,
   uploaded_by  uuid references public.profiles (id) on delete set null,
