@@ -102,7 +102,7 @@ export default function Gallery({
     let alive = true;
     createClient()
       .from("components")
-      .select("id, category, section, filters, figma_url, preview_url, aspect_ratio")
+      .select("id, category, section, filters, figma_url, figma_data, preview_url, aspect_ratio")
       .eq("is_published", true)
       .order("created_at", { ascending: false })
       .then(({ data }) => {
@@ -317,19 +317,35 @@ export default function Gallery({
   // Copy button — shared by both views; `dark` for the logo cards. Two stacked
   // pills anchored at the same spot: on copy the "Copy to Figma" pill slides
   // down + fades out while the "Copied!" pill rises up into its place.
-  const copyButton = (id: string, dark: boolean, figmaUrl: string | null) => {
+  const copyButton = (
+    id: string,
+    dark: boolean,
+    figmaUrl: string | null,
+    figmaData: string | null,
+  ) => {
     const isCopied = copied === id;
     const onClick = async (e: MouseEvent) => {
       e.stopPropagation(); // don't trigger the image lightbox
       if (authLoading) return; // wait for the session to resolve
       if (!loggedIn) return onRequireLogin();
       if (!(await onCopy(id))) return;
-      if (figmaUrl) {
-        try {
+      try {
+        if (figmaData) {
+          // Real Figma clipboard payload — write via execCommand so no browser
+          // permission popup is triggered. Paste recreates the component.
+          const htmlData = figmaData;
+          const listener = (ev: ClipboardEvent) => {
+            ev.clipboardData?.setData("text/html", htmlData);
+            ev.preventDefault();
+          };
+          document.addEventListener("copy", listener);
+          document.execCommand("copy");
+          document.removeEventListener("copy", listener);
+        } else if (figmaUrl) {
           await navigator.clipboard.writeText(figmaUrl);
-        } catch {
-          // clipboard may be blocked; still show the copied state
         }
+      } catch {
+        // clipboard may be blocked; still show the copied state
       }
       markCopied(id);
     };
@@ -499,7 +515,7 @@ export default function Gallery({
                     </div>
                     <span className={overlayCls} />
                   </div>
-                  {copyButton(c.id, false, c.figma_url)}
+                  {copyButton(c.id, false, c.figma_url, c.figma_data)}
                 </div>
               </div>
             ))}
@@ -627,7 +643,7 @@ export default function Gallery({
                         }`}
                       />
                     </div>
-                    {copyButton(c.id, true, c.figma_url)}
+                    {copyButton(c.id, true, c.figma_url, c.figma_data)}
                   </div>
                 </div>
               ))}
@@ -688,7 +704,7 @@ export default function Gallery({
                   </div>
                   <span className={overlayCls} />
                 </div>
-                {copyButton(c.id, false, c.figma_url)}
+                {copyButton(c.id, false, c.figma_url, c.figma_data)}
               </div>
             </div>
           ))}

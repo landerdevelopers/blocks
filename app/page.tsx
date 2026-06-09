@@ -20,6 +20,7 @@ type ColorRow = {
   section: string | null;
   filters: string[] | null;
   figma_url: string | null;
+  figma_data: string | null;
   preview_url: string | null;
   aspect_ratio: number | null;
   colors: { hex: string; pct: number | null }[] | null;

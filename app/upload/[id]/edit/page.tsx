@@ -19,7 +19,7 @@ export default function EditComponentPage({
     const load = async () => {
       const { data } = await createClient()
         .from("components")
-        .select("preview_url, aspect_ratio, figma_url, category, section, filters, colors")
+        .select("preview_url, aspect_ratio, figma_data, category, section, filters, colors")
         .eq("id", id)
         .single();
 
@@ -31,7 +31,7 @@ export default function EditComponentPage({
       setInitial({
         previewUrl: data.preview_url,
         aspectRatio: data.aspect_ratio,
-        figmaUrl: data.figma_url,
+        figmaData: data.figma_data,
         category: data.category,
         section: data.section,
         filters: data.filters,

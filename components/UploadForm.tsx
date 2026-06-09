@@ -163,7 +163,7 @@ function resolveWeights(colors: ColorWeight[]): number[] {
 export type UploadInitialValues = {
   previewUrl?: string | null;
   aspectRatio?: number | null;
-  figmaUrl?: string | null;
+  figmaData?: string | null;
   category?: string | null; // DB category value
   section?: string | null;
   filters?: string[] | null;
@@ -177,6 +177,7 @@ export type SavedComponent = {
   section: string | null;
   filters: string[] | null;
   figma_url: string | null;
+  figma_data: string | null;
   preview_url: string | null;
   aspect_ratio: number | null;
   colors: { hex: string; pct: number | null }[] | null;
@@ -260,13 +261,15 @@ export default function UploadForm({
       })),
   );
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [figma, setFigma] = useState(initialValues?.figmaUrl ?? "");
-  const [figmaEditing, setFigmaEditing] = useState(false);
+  const [figmaData, setFigmaData] = useState<string | null>(
+    initialValues?.figmaData ?? null,
+  );
+  const [pasteWaiting, setPasteWaiting] = useState(false);
   const [figmaCopied, setFigmaCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const figmaInputRef = useRef<HTMLInputElement>(null);
+  const pasteCleanup = useRef<(() => void) | null>(null);
 
   // A local object URL for previewing a freshly-picked file.
   const filePreview = file ? URL.createObjectURL(file) : null;
@@ -277,13 +280,48 @@ export default function UploadForm({
   }, [filePreview]);
   const previewSrc = filePreview ?? existingPreview;
 
-  const openFigmaInput = () => {
-    setFigmaEditing(true);
-    requestAnimationFrame(() => figmaInputRef.current?.focus());
+  // Wait for the user's own Ctrl+V (native paste event — no clipboard-read
+  // permission needed). Stores the Figma component HTML fragment. Esc cancels.
+  const pasteFigmaSection = () => {
+    setPasteWaiting(true);
+    const cleanup = () => {
+      setPasteWaiting(false);
+      document.removeEventListener("paste", onPaste);
+      document.removeEventListener("keydown", onKey);
+      pasteCleanup.current = null;
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      e.preventDefault();
+      const html = e.clipboardData?.getData("text/html") ?? "";
+      if (html.includes("<!--StartFragment-->")) {
+        setFigmaData(html);
+      } else {
+        alert(
+          "No Figma component found. Copy a frame in Figma (Ctrl+C), click the button, then press Ctrl+V.",
+        );
+      }
+      cleanup();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") cleanup();
+    };
+    pasteCleanup.current = cleanup;
+    document.addEventListener("paste", onPaste);
+    document.addEventListener("keydown", onKey);
   };
-  const commitFigma = () => setFigmaEditing(false);
-  const copyFigma = () => {
-    navigator.clipboard?.writeText(figma);
+
+  // Copy the stored Figma component back to the clipboard (execCommand → no
+  // permission popup).
+  const copyFigmaData = () => {
+    if (!figmaData) return;
+    const html = figmaData;
+    const listener = (e: ClipboardEvent) => {
+      e.clipboardData?.setData("text/html", html);
+      e.preventDefault();
+    };
+    document.addEventListener("copy", listener);
+    document.execCommand("copy");
+    document.removeEventListener("copy", listener);
     setFigmaCopied(true);
     setTimeout(() => setFigmaCopied(false), 1500);
   };
@@ -295,7 +333,7 @@ export default function UploadForm({
   const hasImage = !!file || !!existingPreview;
   const canSave =
     hasImage &&
-    !!figma &&
+    !!figmaData &&
     (sections.length === 0 || section !== null) &&
     filters.size > 0;
 
@@ -341,10 +379,6 @@ export default function UploadForm({
   const submit = async () => {
     if (!canSave || saving) return;
     setError(null);
-    if (!figma.startsWith("https://www.figma.com/")) {
-      setError("Figma URL must start with https://www.figma.com/");
-      return;
-    }
     setSaving(true);
     try {
       // Keep the existing preview/aspect unless a new file was chosen.
@@ -374,7 +408,9 @@ export default function UploadForm({
         category: UI_TO_DB[category],
         section: sections.length > 0 ? section : null,
         filters: [...filters],
-        figma_url: figma,
+        // Only the pasted clipboard component is stored; no link.
+        figma_url: null,
+        figma_data: figmaData,
         preview_url,
         aspect_ratio,
         colors: dbColors,
@@ -405,6 +441,7 @@ export default function UploadForm({
           section: c.section,
           filters: c.filters,
           figma_url: c.figma_url,
+          figma_data: c.figma_data,
           preview_url: c.preview_url,
           aspect_ratio: c.aspect_ratio,
         } as GalleryComponent);
@@ -480,22 +517,16 @@ export default function UploadForm({
       {/* Paste Figma */}
       <div className="mt-5 flex flex-col gap-2">
         <FieldLabel>Paste Figma</FieldLabel>
-        <div className="flex w-full items-center gap-1 rounded-lg border border-[#e4e4e7] bg-white px-[7px] py-1.5">
-          {figmaEditing ? (
-            <input
-              ref={figmaInputRef}
-              value={figma}
-              onChange={(e) => setFigma(e.target.value)}
-              onBlur={commitFigma}
-              onKeyDown={(e) => e.key === "Enter" && commitFigma()}
-              placeholder="Paste Figma section link…"
-              className="flex-1 rounded-md border border-transparent px-3 py-1.5 text-sm tracking-[-0.03em] text-[#09090b] outline-none placeholder:text-[#a1a1aa]"
-            />
-          ) : figma ? (
+        <div className="flex min-h-[46px] w-full items-center gap-1 rounded-lg border border-[#e4e4e7] bg-white px-[7px] py-1.5">
+          {pasteWaiting ? (
+            <span className="flex-1 border border-transparent px-1 py-1.5 text-center text-sm font-medium tracking-[-0.03em] text-[#2974ff]">
+              Press Ctrl+V to paste your Figma component
+            </span>
+          ) : figmaData ? (
             <>
               <button
                 type="button"
-                onClick={openFigmaInput}
+                onClick={pasteFigmaSection}
                 className="flex cursor-pointer items-center gap-2 rounded-[7px] border border-[#09090b] bg-[#09090b] px-2 py-1.5 text-sm tracking-[-0.03em] text-white transition-colors hover:bg-[#27272a]"
               >
                 <ClipboardIcon />
@@ -503,17 +534,17 @@ export default function UploadForm({
               </button>
               <button
                 type="button"
-                onClick={copyFigma}
+                onClick={copyFigmaData}
                 className="ml-auto flex cursor-pointer items-center gap-2 rounded-[7px] border border-[#e4e4e7] px-2 py-1.5 text-sm tracking-[-0.03em] text-[#52525b] transition-colors hover:bg-[#fafafa]"
               >
                 <CopyIcon />
-                {figmaCopied ? "Copied!" : "Copy Pasted Text"}
+                {figmaCopied ? "Copied!" : "Copy"}
               </button>
             </>
           ) : (
             <button
               type="button"
-              onClick={openFigmaInput}
+              onClick={pasteFigmaSection}
               className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-md border border-transparent px-3 py-1.5 text-sm tracking-[-0.03em] text-[#52525b] transition-colors hover:bg-[#fafafa]"
             >
               <ClipboardIcon />
@@ -521,11 +552,20 @@ export default function UploadForm({
             </button>
           )}
         </div>
-        <p className="text-[11px] tracking-[-0.03em] text-[#a1a1aa]">
-          {figma
-            ? "Figma content pasted. Use Paste Again to replace it."
-            : "No Figma content pasted yet. Click the button to paste from clipboard."}
-        </p>
+        {pasteWaiting ? (
+          <p className="text-[11px] tracking-[-0.03em] text-[#a1a1aa]">
+            Press Esc to cancel.
+          </p>
+        ) : figmaData ? (
+          <p className="flex items-center gap-1.5 text-[11px] tracking-[-0.03em] text-[#1C9A00]">
+            <CheckIcon />
+            Figma component pasted successfully.
+          </p>
+        ) : (
+          <p className="text-[11px] tracking-[-0.03em] text-[#a1a1aa]">
+            Copy a frame in Figma (Ctrl+C), then click to paste.
+          </p>
+        )}
       </div>
 
       {/* Categories */}
@@ -836,6 +876,14 @@ function ClipboardIcon() {
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <rect x="9" y="2" width="6" height="4" rx="1" />
       <path d="M9 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1C9A00" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polyline points="20 6 9 17 4 12" />
     </svg>
   );
 }

@@ -28,6 +28,9 @@ create table if not exists public.components (
   copy_count   int         not null default 0,
   -- figma_url:   the Figma share link for the component/section.
   figma_url    text,
+  -- figma_data:  raw Figma clipboard HTML (text/html with <!--StartFragment-->)
+  --              so "Copy to Figma" pastes the actual component, not a link.
+  figma_data   text,
   -- preview_url: a Cloudflare Images delivery URL for the preview image (no
   --              Supabase Storage bucket is used for previews).
   preview_url  text,
