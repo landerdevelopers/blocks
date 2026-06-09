@@ -153,10 +153,10 @@ function SectionCard({
       className="flex w-full cursor-pointer items-center justify-between"
     >
       <div className="flex items-center gap-1">
-        <span className="text-base font-medium tracking-[-0.03em] text-[#09090b]">
+        <span className="text-base font-medium leading-none tracking-[-0.03em] text-[#09090b]">
           {section.label}
         </span>
-        <span className="text-xs tracking-[-0.03em] text-[#71717b]">
+        <span className="text-[14px] leading-none tracking-[-0.03em] text-[#71717b]">
           ({catComps.length})
         </span>
       </div>
@@ -178,7 +178,7 @@ function SectionCard({
   }
 
   return (
-    <div className="flex w-full flex-col rounded-[10px] bg-white p-3">
+    <div className="flex w-full flex-col rounded-[10px] border border-[#e7e9ee] bg-white p-3">
       {Header}
       {/* Collapsible body — animates via grid-rows */}
       <div

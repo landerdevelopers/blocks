@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { Pencil } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -231,7 +231,8 @@ export default function Gallery({
   // down + fades out while the "Copied!" pill rises up into its place.
   const copyButton = (id: string, dark: boolean, figmaUrl: string | null) => {
     const isCopied = copied === id;
-    const onClick = async () => {
+    const onClick = async (e: MouseEvent) => {
+      e.stopPropagation(); // don't trigger the image lightbox
       if (authLoading) return; // wait for the session to resolve
       if (!loggedIn) return onRequireLogin();
       if (!onCopy(id)) return;
@@ -268,9 +269,9 @@ export default function Gallery({
               borderRadius: cfg.r,
               fontSize: cfg.fs,
               transform: isCopied ? "translateY(14px)" : "translateY(0)",
-              opacity: isCopied ? 0 : 1,
+              opacity: isCopied ? 0 : undefined,
             }}
-            className={`${pill} ${cfg.gap} cursor-pointer ${
+            className={`${pill} ${cfg.gap} cursor-pointer hover:opacity-90 ${
               isCopied ? "pointer-events-none" : "group-hover:pointer-events-auto"
             } ${dark ? "border-black bg-black text-white" : "border-[#e7e9ee] bg-white text-[#09090b]"}`}
           >
@@ -379,37 +380,39 @@ export default function Gallery({
                 className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
               >
                 {adminPencil(c.id)}
-                <div
-                  onClick={() =>
-                    c.preview_url &&
-                    setLightbox({ src: c.preview_url, logo: false })
-                  }
-                  className="relative w-full cursor-zoom-in overflow-hidden rounded-md border border-[#e7e9ee]"
-                >
+                <div className="relative w-full overflow-hidden rounded-md">
                   <div
-                    className={`relative w-full overflow-hidden rounded-md bg-[#e4e4e7] ${
-                      loadedIds.has(c.id) ? "" : "animate-pulse"
-                    }`}
-                    style={{
-                      paddingBottom: c.aspect_ratio
-                        ? `${(1 / c.aspect_ratio) * 100}%`
-                        : "75%",
-                    }}
+                    onClick={() =>
+                      c.preview_url &&
+                      setLightbox({ src: c.preview_url, logo: false })
+                    }
+                    className="relative w-full cursor-zoom-in overflow-hidden rounded-md border border-[#e7e9ee]"
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      alt=""
-                      src={cloudflareUrl(c.preview_url ?? "")}
-                      loading={j === 0 ? "eager" : "lazy"}
-                      onLoad={() => markLoaded(c.id)}
-                      className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-500 ${
-                        loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
+                    <div
+                      className={`relative w-full overflow-hidden rounded-md bg-[#e4e4e7] ${
+                        loadedIds.has(c.id) ? "" : "animate-pulse"
                       }`}
-                    />
+                      style={{
+                        paddingBottom: c.aspect_ratio
+                          ? `${(1 / c.aspect_ratio) * 100}%`
+                          : "75%",
+                      }}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        alt=""
+                        src={cloudflareUrl(c.preview_url ?? "")}
+                        loading={j === 0 ? "eager" : "lazy"}
+                        onLoad={() => markLoaded(c.id)}
+                        className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-500 ${
+                          loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
+                        }`}
+                      />
+                    </div>
+                    <span className={overlayCls} />
                   </div>
-                  <span className={overlayCls} />
+                  {copyButton(c.id, false, c.figma_url)}
                 </div>
-                {copyButton(c.id, false, c.figma_url)}
               </div>
             ))}
           </div>
@@ -505,35 +508,37 @@ export default function Gallery({
                   className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
                 >
                   {adminPencil(c.id, true)}
-                  <div
-                    onClick={() =>
-                      c.preview_url &&
-                      setLightbox({ src: c.preview_url, logo: true })
-                    }
-                    className="relative flex w-full cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-[#e7e9ee] bg-white"
-                    style={{
-                      aspectRatio:
-                        n >= 6 ? "3 / 4" : n >= 5 ? "4 / 5" : n >= 3 ? "1 / 1" : "5 / 4",
-                      padding:
-                        n >= 6 ? 16 : n >= 5 ? 24 : n >= 4 ? 32 : n >= 3 ? 48 : 72,
-                    }}
-                  >
-                    {/* Placeholder fills the whole card (ignores padding). */}
-                    {!loadedIds.has(c.id) && (
-                      <span className="absolute inset-0 animate-pulse bg-[#e4e4e7]" />
-                    )}
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      alt=""
-                      src={cloudflareUrl(c.preview_url ?? "")}
-                      loading={idx < n ? "eager" : "lazy"}
-                      onLoad={() => markLoaded(c.id)}
-                      className={`size-full object-contain transition-opacity duration-500 ${
-                        loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
-                      }`}
-                    />
+                  <div className="relative w-full overflow-hidden rounded-md">
+                    <div
+                      onClick={() =>
+                        c.preview_url &&
+                        setLightbox({ src: c.preview_url, logo: true })
+                      }
+                      className="relative flex w-full cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-[#e7e9ee] bg-white"
+                      style={{
+                        aspectRatio:
+                          n >= 6 ? "3 / 4" : n >= 5 ? "4 / 5" : n >= 3 ? "1 / 1" : "5 / 4",
+                        padding:
+                          n >= 6 ? 16 : n >= 5 ? 24 : n >= 4 ? 32 : n >= 3 ? 48 : 72,
+                      }}
+                    >
+                      {/* Placeholder fills the whole card (ignores padding). */}
+                      {!loadedIds.has(c.id) && (
+                        <span className="absolute inset-0 animate-pulse bg-[#e4e4e7]" />
+                      )}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        alt=""
+                        src={cloudflareUrl(c.preview_url ?? "")}
+                        loading={idx < n ? "eager" : "lazy"}
+                        onLoad={() => markLoaded(c.id)}
+                        className={`size-full object-contain transition-opacity duration-500 ${
+                          loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
+                        }`}
+                      />
+                    </div>
+                    {copyButton(c.id, true, c.figma_url)}
                   </div>
-                  {copyButton(c.id, true, c.figma_url)}
                 </div>
               ))}
             </div>
@@ -561,37 +566,39 @@ export default function Gallery({
               className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
             >
               {adminPencil(c.id)}
-              <div
-                onClick={() =>
-                  c.preview_url &&
-                  setLightbox({ src: c.preview_url, logo: false })
-                }
-                className="relative w-full cursor-zoom-in overflow-hidden rounded-md border border-[#e7e9ee]"
-              >
+              <div className="relative w-full overflow-hidden rounded-md">
                 <div
-                  className={`relative w-full overflow-hidden rounded-md bg-[#e4e4e7] ${
-                    loadedIds.has(c.id) ? "" : "animate-pulse"
-                  }`}
-                  style={{
-                    paddingBottom: c.aspect_ratio
-                      ? `${(1 / c.aspect_ratio) * 100}%`
-                      : "75%",
-                  }}
+                  onClick={() =>
+                    c.preview_url &&
+                    setLightbox({ src: c.preview_url, logo: false })
+                  }
+                  className="relative w-full cursor-zoom-in overflow-hidden rounded-md border border-[#e7e9ee]"
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    alt=""
-                    src={cloudflareUrl(c.preview_url ?? "")}
-                    loading={j === 0 ? "eager" : "lazy"}
-                    onLoad={() => markLoaded(c.id)}
-                    className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-500 ${
-                      loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
+                  <div
+                    className={`relative w-full overflow-hidden rounded-md bg-[#e4e4e7] ${
+                      loadedIds.has(c.id) ? "" : "animate-pulse"
                     }`}
-                  />
+                    style={{
+                      paddingBottom: c.aspect_ratio
+                        ? `${(1 / c.aspect_ratio) * 100}%`
+                        : "75%",
+                    }}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      alt=""
+                      src={cloudflareUrl(c.preview_url ?? "")}
+                      loading={j === 0 ? "eager" : "lazy"}
+                      onLoad={() => markLoaded(c.id)}
+                      className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-500 ${
+                        loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
+                      }`}
+                    />
+                  </div>
+                  <span className={overlayCls} />
                 </div>
-                <span className={overlayCls} />
+                {copyButton(c.id, false, c.figma_url)}
               </div>
-              {copyButton(c.id, false, c.figma_url)}
             </div>
           ))}
         </div>
