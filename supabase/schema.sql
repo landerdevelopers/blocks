@@ -331,6 +331,8 @@ declare
   sh numeric;
   ss numeric;
   sl numeric;
+  lonly boolean := false;  -- lightness-only match (dark / light / gray families)
+  ltol  numeric := 40;     -- lightness tolerance for the lightness-only branch
 begin
   shsl := public.hsl_from_hex(search_hex);
   if shsl is null then
@@ -339,6 +341,17 @@ begin
   sh := shsl[1];
   ss := shsl[2];
   sl := shsl[3];
+
+  -- Decide the matching mode from the SEARCH color.
+  if sl < 20 or sl > 80 then
+    -- Very dark/black or very light/white family: lightness only, +-15.
+    lonly := true;
+    ltol  := 15;
+  elsif ss < 10 then
+    -- Gray family: lightness only, +-20.
+    lonly := true;
+    ltol  := 20;
+  end if;
 
   return query
   select c.*
@@ -354,12 +367,17 @@ begin
       and comp.colors is not null
       and jsonb_typeof(comp.colors) = 'array'
       and eh is not null
-      -- Hue within 30deg (circular distance).
-      and least(abs(eh[1] - sh), 360 - abs(eh[1] - sh)) <= 30
-      -- Saturation within 40 (filters out near-grays).
-      and abs(eh[2] - ss) <= 40
-      -- Lightness within 40 (allows dark/light variants).
-      and abs(eh[3] - sl) <= 40
+      and (
+        -- Dark / light / gray families: match by lightness only (any hue/sat).
+        (lonly and abs(eh[3] - sl) <= ltol)
+        -- Normal colorful range: hue within 30deg (circular), sat +-40, light +-40.
+        or (
+          not lonly
+          and least(abs(eh[1] - sh), 360 - abs(eh[1] - sh)) <= 30
+          and abs(eh[2] - ss) <= 40
+          and abs(eh[3] - sl) <= 40
+        )
+      )
     order by comp.id, (elem ->> 'pct')::numeric desc nulls last
   ) m
   join public.components c on c.id = m.id
