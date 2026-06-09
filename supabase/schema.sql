@@ -28,8 +28,8 @@ create table if not exists public.components (
   copy_count   int         not null default 0,
   -- figma_url:   the Figma share link for the component/section.
   figma_url    text,
-  -- preview_url: a Cloudinary URL for the preview image (no Supabase Storage
-  --              bucket is used for previews).
+  -- preview_url: a Cloudflare Images delivery URL for the preview image (no
+  --              Supabase Storage bucket is used for previews).
   preview_url  text,
   -- aspect_ratio: width / height of the preview image, used to reserve exact
   --               space (padding-bottom trick) before the image loads.
@@ -264,10 +264,60 @@ create policy "Avatars: delete own folder"
   );
 
 -- -----------------------------------------------------------------------------
+-- Helper: hsl_from_hex('#RRGGBB') -> {h, s, l} with h in 0..360, s/l in 0..100.
+-- Returns null for null / malformed input.
+-- -----------------------------------------------------------------------------
+
+create or replace function public.hsl_from_hex(hexin text)
+returns numeric[]
+language plpgsql
+immutable
+as $$
+declare
+  h2 text;
+  r  numeric; g numeric; b numeric;
+  mx numeric; mn numeric; d numeric;
+  hh numeric := 0; ss numeric := 0; ll numeric;
+begin
+  if hexin is null then
+    return null;
+  end if;
+  h2 := upper(trim(hexin));
+  if h2 !~ '^#[0-9A-F]{6}$' then
+    return null;
+  end if;
+
+  r := (('x' || substr(h2, 2, 2))::bit(8)::int) / 255.0;
+  g := (('x' || substr(h2, 4, 2))::bit(8)::int) / 255.0;
+  b := (('x' || substr(h2, 6, 2))::bit(8)::int) / 255.0;
+
+  mx := greatest(r, g, b);
+  mn := least(r, g, b);
+  d  := mx - mn;
+  ll := (mx + mn) / 2;
+
+  if d <> 0 then
+    ss := d / (1 - abs(2 * ll - 1));
+    if mx = r then
+      hh := 60 * (((((g - b) / d) % 6) + 6) % 6);
+    elsif mx = g then
+      hh := 60 * ((b - r) / d + 2);
+    else
+      hh := 60 * ((r - g) / d + 4);
+    end if;
+    hh := ((hh % 360) + 360) % 360;
+  end if;
+
+  return array[hh, ss * 100, ll * 100];
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
 -- RPC: search_by_color(search_hex text, tolerance int)
--- Unpacks each component's colors array, compares every color to search_hex by
--- per-channel RGB difference within `tolerance`, and returns matching published
--- components ordered by the matched color's pct descending.
+-- HSL-based matching: a component color matches the search color when they are
+-- in the same family — hue within 30deg (circular), saturation within 40, and
+-- lightness within 40. The `tolerance` param is ignored (kept for signature
+-- compatibility). Returns matching published components, highest pct first.
 -- STABLE; handles null/malformed input and null colors gracefully.
 -- -----------------------------------------------------------------------------
 
@@ -277,26 +327,18 @@ language plpgsql
 stable
 as $$
 declare
-  hex text;
-  sr  int;
-  sg  int;
-  sb  int;
-  tol int := coalesce(tolerance, 0);
+  shsl numeric[];
+  sh numeric;
+  ss numeric;
+  sl numeric;
 begin
-  -- Bail out cleanly on null / malformed input.
-  if search_hex is null then
+  shsl := public.hsl_from_hex(search_hex);
+  if shsl is null then
     return;
   end if;
-
-  hex := upper(trim(search_hex));
-  if hex !~ '^#[0-9A-F]{6}$' then
-    return;
-  end if;
-
-  -- Target RGB channels (hex pair -> 0..255).
-  sr := ('x' || substr(hex, 2, 2))::bit(8)::int;
-  sg := ('x' || substr(hex, 4, 2))::bit(8)::int;
-  sb := ('x' || substr(hex, 6, 2))::bit(8)::int;
+  sh := shsl[1];
+  ss := shsl[2];
+  sl := shsl[3];
 
   return query
   select c.*
@@ -307,13 +349,17 @@ begin
            (elem ->> 'pct')::numeric as pct
     from public.components comp
     cross join lateral jsonb_array_elements(comp.colors) as elem
+    cross join lateral public.hsl_from_hex(elem ->> 'hex') as eh
     where comp.is_published = true
       and comp.colors is not null
       and jsonb_typeof(comp.colors) = 'array'
-      and (elem ->> 'hex') ~* '^#[0-9A-F]{6}$'
-      and abs(('x' || substr(upper(elem ->> 'hex'), 2, 2))::bit(8)::int - sr) <= tol
-      and abs(('x' || substr(upper(elem ->> 'hex'), 4, 2))::bit(8)::int - sg) <= tol
-      and abs(('x' || substr(upper(elem ->> 'hex'), 6, 2))::bit(8)::int - sb) <= tol
+      and eh is not null
+      -- Hue within 30deg (circular distance).
+      and least(abs(eh[1] - sh), 360 - abs(eh[1] - sh)) <= 30
+      -- Saturation within 40 (filters out near-grays).
+      and abs(eh[2] - ss) <= 40
+      -- Lightness within 40 (allows dark/light variants).
+      and abs(eh[3] - sl) <= 40
     order by comp.id, (elem ->> 'pct')::numeric desc nulls last
   ) m
   join public.components c on c.id = m.id

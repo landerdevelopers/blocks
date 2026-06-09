@@ -6,9 +6,14 @@ import { Pencil } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 import { readComponentsCache } from "@/lib/componentsCache";
-import { cloudinaryOptimize } from "@/lib/cloudinary";
-
 type Component = GalleryComponent;
+
+// Cloudflare Images URLs already have the delivery variant baked in at upload
+// time, so just pass them through (no-op for non-Cloudflare URLs).
+function cloudflareUrl(url: string): string {
+  if (!url || !url.includes("imagedelivery.net")) return url;
+  return url;
+}
 
 // Sidebar section id -> public.components.category value.
 const CAT_MAP: Record<string, string> = {
@@ -162,6 +167,12 @@ export default function Gallery({
       ? "top-0 bg-linear-to-b from-black/70 to-transparent"
       : "bottom-0 bg-linear-to-t from-black/70 to-transparent"
   }`;
+
+  // `cols` derives from localStorage on the client, so the grid's column count
+  // differs from the SSR default. Render only after mount to avoid a hydration
+  // mismatch on the bucket/column structure.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const [copied, setCopied] = useState<string | null>(null);
   // Ids whose preview image has finished loading — drives the placeholder fade.
@@ -388,7 +399,7 @@ export default function Gallery({
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       alt=""
-                      src={cloudinaryOptimize(c.preview_url ?? "")}
+                      src={cloudflareUrl(c.preview_url ?? "")}
                       loading={j === 0 ? "eager" : "lazy"}
                       onLoad={() => markLoaded(c.id)}
                       className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-500 ${
@@ -408,6 +419,17 @@ export default function Gallery({
     );
   };
 
+  // Before mount, render an empty (but identically-classed) main so SSR and the
+  // first client render match — the real grid depends on the client-only `cols`.
+  if (!mounted) {
+    return (
+      <main
+        suppressHydrationWarning
+        className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4"
+      />
+    );
+  }
+
   // Color search overrides the normal list while active.
   if (colorSearchActive) {
     if (colorSearchLoading) {
@@ -423,8 +445,8 @@ export default function Gallery({
         <main className="flex h-full flex-1 items-center justify-center rounded-tl-[22px] bg-white p-4">
           <div className="flex max-w-md flex-col items-center gap-0 text-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img alt="" src="/NoColor.png" className="size-72 object-contain" />
-            <p className="-mt-3 text-[20px] font-medium tracking-[-0.03em] text-[#09090b]">
+            <img alt="" src="/NoColor.png" className="size-65 object-contain" />
+            <p className="-mt-3 text-[18px] font-medium tracking-[-0.03em] text-[#09090b]">
               No blocks found for this color
             </p>
           </div>
@@ -441,8 +463,8 @@ export default function Gallery({
       <main className="flex h-full flex-1 items-center justify-center rounded-tl-[22px] bg-white p-4">
         <div className="flex max-w-md flex-col items-center gap-0 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img alt="" src="/NoColor.png" className="size-72 object-contain" />
-          <p className="-mt-3 text-[20px] font-medium tracking-[-0.03em] text-[#09090b]">
+          <img alt="" src="/NoColor.png" className="size-65 object-contain" />
+          <p className="-mt-3 text-[18px] font-medium tracking-[-0.03em] text-[#09090b]">
             No blocks match the selected filter
           </p>
         </div>
@@ -503,7 +525,7 @@ export default function Gallery({
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       alt=""
-                      src={cloudinaryOptimize(c.preview_url ?? "")}
+                      src={cloudflareUrl(c.preview_url ?? "")}
                       loading={idx < n ? "eager" : "lazy"}
                       onLoad={() => markLoaded(c.id)}
                       className={`size-full object-contain transition-opacity duration-500 ${
@@ -559,7 +581,7 @@ export default function Gallery({
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     alt=""
-                    src={cloudinaryOptimize(c.preview_url ?? "")}
+                    src={cloudflareUrl(c.preview_url ?? "")}
                     loading={j === 0 ? "eager" : "lazy"}
                     onLoad={() => markLoaded(c.id)}
                     className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-500 ${

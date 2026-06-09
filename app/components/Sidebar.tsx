@@ -95,14 +95,14 @@ function Chip({
     <button
       type="button"
       onClick={onClick}
-      className={`flex shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 transition-colors ${
+      className={`flex shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 transition-all duration-200 ease-out active:scale-95 ${
         active
           ? "border-[#2974ff] bg-[#deeaff]"
           : "border-[#e4e4e7] bg-transparent shadow-[0px_0px_0.5px_0px_rgba(0,0,0,0.25)] hover:bg-[#fafafa]"
       }`}
     >
       <span
-        className={`text-sm tracking-[-0.03em] ${
+        className={`text-sm tracking-[-0.03em] transition-colors duration-200 ${
           active ? "text-[#2974ff]" : "text-[#71717b]"
         }`}
       >
@@ -110,7 +110,7 @@ function Chip({
       </span>
       {count != null && (
         <span
-          className={`flex items-center justify-center rounded-full border px-1.5 text-center text-xs leading-[18px] tracking-[-0.03em] ${
+          className={`flex items-center justify-center rounded-full border px-1.5 text-center text-xs leading-[18px] tracking-[-0.03em] transition-colors duration-200 ${
             active
               ? "border-[#99bdff] bg-[#ccdeff] text-[#2974ff]"
               : "border-[#e4e4e7] text-[#71717b]"
@@ -233,7 +233,7 @@ function SectionCard({
                       key={key}
                       type="button"
                       onClick={() => select(key)}
-                      className={`flex items-center justify-center rounded-lg border text-[14px] tracking-[-0.03em] transition-colors ${
+                      className={`flex cursor-pointer items-center justify-center rounded-lg border text-[14px] tracking-[-0.03em] transition-all duration-200 ease-out active:scale-95 ${
                         isLetter ? "size-[30px] p-1.5" : "h-[30px] px-2"
                       } ${
                         active

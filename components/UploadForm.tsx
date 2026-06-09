@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { uploadToCloudinary } from "@/lib/cloudinary";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 
 const clamp = (n: number) => Math.min(1, Math.max(0, n));
@@ -313,7 +312,14 @@ export default function UploadForm({
       let preview_url = existingPreview;
       let aspect_ratio = existingAspect;
       if (file) {
-        const up = await uploadToCloudinary(file);
+        const form = new FormData();
+        form.append("file", file);
+        const res = await fetch("/api/upload-image", {
+          method: "POST",
+          body: form,
+        });
+        const up = await res.json();
+        if (!res.ok) throw new Error(up.error || "Image upload failed.");
         preview_url = up.url;
         aspect_ratio = up.aspectRatio;
       }

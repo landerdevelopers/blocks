@@ -132,13 +132,30 @@ function HomeInner() {
       logos: "Logos",
     };
     const dbCat = CAT_MAP[activeCategory ?? "website"];
+    // Also honor the active section filters, mirroring the gallery's filter rules.
+    const matchesFilters = (c: ColorRow) => {
+      if (!activeFilters.length) return true;
+      if (dbCat === "Logos") {
+        return activeFilters.some((f) => (c.filters ?? []).includes(f));
+      }
+      const tags = activeFilters.filter((f) => !f.startsWith("style:"));
+      const themes = activeFilters
+        .filter((f) => f.startsWith("style:"))
+        .map((f) => f.slice("style:".length));
+      if (tags.length && !tags.includes(c.section ?? "")) return false;
+      if (themes.length && !themes.some((t) => (c.filters ?? []).includes(t)))
+        return false;
+      return true;
+    };
     const lists = await Promise.all(
       picked.map((h) =>
         supabase.rpc("search_by_color", { search_hex: h, tolerance: 60 }),
       ),
     );
     const arrays = lists.map((r) =>
-      ((r.data as ColorRow[] | null) ?? []).filter((c) => c.category === dbCat),
+      ((r.data as ColorRow[] | null) ?? []).filter(
+        (c) => c.category === dbCat && matchesFilters(c),
+      ),
     );
 
     let result: ColorRow[];
@@ -171,12 +188,12 @@ function HomeInner() {
     setColorHexes([]);
   };
 
-  // Re-run the active color search whenever the section changes, so results
-  // reflect the newly opened section instead of staying stale.
+  // Re-run the active color search whenever the section or its filters change,
+  // so results reflect the current selection instead of staying stale.
   useEffect(() => {
     if (colorSearchActive && colorHexes.length) runColorSearch(colorHexes);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCategory]);
+  }, [activeCategory, activeFilters.join(",")]);
 
   // Persist the active category so it's known synchronously on next load.
   useEffect(() => {
