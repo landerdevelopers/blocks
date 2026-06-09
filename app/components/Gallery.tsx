@@ -379,8 +379,8 @@ export default function Gallery({
                 onMouseLeave={resetAfterLeave}
                 className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
               >
-                {adminPencil(c.id)}
                 <div className="relative w-full overflow-hidden rounded-md">
+                  {adminPencil(c.id)}
                   <div
                     onClick={() =>
                       c.preview_url &&
@@ -507,8 +507,8 @@ export default function Gallery({
                   onMouseLeave={resetAfterLeave}
                   className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
                 >
-                  {adminPencil(c.id, true)}
                   <div className="relative w-full overflow-hidden rounded-md">
+                    {adminPencil(c.id, true)}
                     <div
                       onClick={() =>
                         c.preview_url &&
@@ -565,8 +565,8 @@ export default function Gallery({
               onMouseLeave={resetAfterLeave}
               className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
             >
-              {adminPencil(c.id)}
               <div className="relative w-full overflow-hidden rounded-md">
+                {adminPencil(c.id)}
                 <div
                   onClick={() =>
                     c.preview_url &&
