@@ -205,11 +205,7 @@ export default function ColorSearch({
   return (
     <div
       ref={ref}
-      onClick={() => {
-        setPreviewInstant(false); // re-enable fade for a cancel-close
-        setOpen((o) => !o);
-      }}
-      className="relative flex w-full shrink-0 cursor-pointer items-center justify-between rounded-full border border-[#e7e9ee] bg-white p-1.5"
+      className="relative flex w-full shrink-0 items-center justify-between rounded-full border border-[#e7e9ee] bg-white p-1.5"
     >
       <div className="flex items-center justify-center gap-1 rounded-full bg-[#f5f5f5] py-1.5 pl-1.5 pr-2.5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -225,9 +221,8 @@ export default function ColorSearch({
         <button
           ref={buttonRef}
           type="button"
-          onClick={(e) => {
-            e.stopPropagation(); // root handles the toggle
-            setPreviewInstant(false);
+          onClick={() => {
+            setPreviewInstant(false); // re-enable fade for a cancel-close
             setOpen((o) => !o);
           }}
           aria-label="Add color"
@@ -264,10 +259,7 @@ export default function ColorSearch({
           <button
             key={c}
             type="button"
-            onClick={(e) => {
-              e.stopPropagation(); // don't toggle the picker
-              removeColor(c);
-            }}
+            onClick={() => removeColor(c)}
             title={`Remove ${c}`}
             className={`group relative shrink-0 cursor-pointer overflow-hidden rounded-full ring-1 ring-inset ring-black/10 transition-all duration-300 ease-out ${
               removing === c
