@@ -40,6 +40,7 @@ type AuthState = {
   componentsLoaded: boolean;
   setComponents: (components: GalleryComponent[]) => void;
   addComponent: (component: GalleryComponent) => void;
+  removeComponent: (id: string) => void;
 };
 
 export const useAuthStore = create<AuthState>()(
@@ -66,6 +67,12 @@ export const useAuthStore = create<AuthState>()(
         set((s) => {
           const next = [component, ...s.components];
           writeComponentsCache(next); // persist so the upload survives a refresh
+          return { components: next };
+        }),
+      removeComponent: (id) =>
+        set((s) => {
+          const next = s.components.filter((c) => c.id !== id);
+          writeComponentsCache(next);
           return { components: next };
         }),
     }),

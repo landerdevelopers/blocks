@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { Pencil } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 import { readComponentsCache } from "@/lib/componentsCache";
@@ -73,7 +73,7 @@ export default function Gallery({
   cols?: number;
   loggedIn: boolean;
   onRequireLogin: () => void;
-  onCopy: (componentId: string) => boolean;
+  onCopy: (componentId: string) => boolean | Promise<boolean>;
   category?: string | null;
   filters?: string[];
   colorSearchActive?: boolean;
@@ -84,6 +84,7 @@ export default function Gallery({
   const authLoading = useAuthStore((s) => s.authLoading);
   // Shared list in the store so new uploads appear instantly (no refetch).
   const components = useAuthStore((s) => s.components);
+  const removeComponent = useAuthStore((s) => s.removeComponent);
   const componentsLoaded = useAuthStore((s) => s.componentsLoaded);
   const setComponents = useAuthStore((s) => s.setComponents);
 
@@ -175,6 +176,67 @@ export default function Gallery({
   useEffect(() => setMounted(true), []);
 
   const [copied, setCopied] = useState<string | null>(null);
+  // Admin delete: id awaiting confirmation in the modal (null = closed).
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const doDelete = async () => {
+    if (!confirmDelete) return;
+    setDeleting(true);
+    const { error } = await createClient()
+      .from("components")
+      .delete()
+      .eq("id", confirmDelete);
+    setDeleting(false);
+    if (error) {
+      console.error("[delete] component:", error.message);
+      return;
+    }
+    removeComponent(confirmDelete);
+    setConfirmDelete(null);
+  };
+
+  // Delete confirmation modal — portal'd so it overlays everything.
+  const renderDeleteModal = () =>
+    confirmDelete && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            onClick={() => !deleting && setConfirmDelete(null)}
+            className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex w-[360px] flex-col gap-2 rounded-2xl bg-white p-6 shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
+            >
+              <h2 className="text-[18px] font-semibold tracking-[-0.03em] text-[#09090b]">
+                Are you sure?
+              </h2>
+              <p className="text-[14px] leading-5 tracking-[-0.03em] text-[#71717b]">
+                This will permanently delete this component. This action cannot
+                be undone.
+              </p>
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(null)}
+                  disabled={deleting}
+                  className="cursor-pointer rounded-lg border border-[#e4e4e7] px-3.5 py-2 text-[14px] font-medium tracking-[-0.03em] text-[#52525b] transition-colors hover:bg-[#fafafa] disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={doDelete}
+                  disabled={deleting}
+                  className="cursor-pointer rounded-lg bg-[#ef4444] px-3.5 py-2 text-[14px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#dc2626] disabled:opacity-50"
+                >
+                  {deleting ? "Deleting…" : "Delete"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
   // Ids whose preview image has finished loading — drives the placeholder fade.
   const [loadedIds, setLoadedIds] = useState<Set<string>>(new Set());
   const markLoaded = (id: string) =>
@@ -202,27 +264,53 @@ export default function Gallery({
     return () => document.removeEventListener("keydown", onKey);
   }, [lightbox]);
 
-  // Admin pencil — opens the edit page in a new tab. Slides in from the top.
-  const adminPencil = (id: string, dark = false) => {
+  // Admin controls — Edit + Delete, shown on hover. Slide in from the top.
+  // Positions computed in px from the box size so the two buttons never overlap.
+  const adminButtons = (id: string, dark = false) => {
     if (!isAdmin) return null;
     const k = KBOX[Math.min(6, Math.max(1, cols))] ?? KBOX[3];
-    const side = cols === 1 ? "left-5" : "right-3";
-    const top = cols === 1 ? "top-5" : "top-3";
+    const pad = cols === 1 ? 20 : 12; // inset from the edge
+    const gap = 10; // space between the two buttons
+    const sideKey = cols === 1 ? "left" : "right";
+    const base = `absolute z-30 flex cursor-pointer items-center justify-center rounded-full border opacity-0 shadow-[0px_2px_6px_rgba(0,0,0,0.15)] transition-[opacity,translate] duration-300 ease-out -translate-y-[calc(100%+0.75rem)] pointer-events-none group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100`;
+    const tone = dark
+      ? "border-black bg-black text-white"
+      : "border-[#e7e9ee] bg-white text-[#52525b]";
     return (
-      <button
-        type="button"
-        aria-label="Edit component"
-        onClick={(e) => {
-          e.stopPropagation();
-          window.open(`/upload/${id}/edit`, "_blank");
-        }}
-        style={{ width: k.box, height: k.box }}
-        className={`absolute ${top} ${side} z-30 flex cursor-pointer items-center justify-center rounded-full border opacity-0 shadow-[0px_2px_6px_rgba(0,0,0,0.15)] transition-[opacity,translate] duration-300 ease-out -translate-y-[calc(100%+0.75rem)] pointer-events-none group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 ${
-          dark ? "border-black bg-black text-white" : "border-[#e7e9ee] bg-white text-[#52525b]"
-        }`}
-      >
-        <Pencil size={k.icon} strokeWidth={2} />
-      </button>
+      <>
+        {/* Edit */}
+        <button
+          type="button"
+          aria-label="Edit component"
+          onClick={(e) => {
+            e.stopPropagation();
+            window.open(`/upload/${id}/edit`, "_blank");
+          }}
+          style={{ width: k.box, height: k.box, top: pad, [sideKey]: pad }}
+          className={`${base} ${tone}`}
+        >
+          <Pencil size={k.icon} strokeWidth={2} />
+        </button>
+
+        {/* Delete — opens the confirmation modal. */}
+        <button
+          type="button"
+          aria-label="Delete component"
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirmDelete(id);
+          }}
+          style={{
+            width: k.box,
+            height: k.box,
+            top: pad,
+            [sideKey]: pad + k.box + gap,
+          }}
+          className={`${base} ${tone} hover:text-[#ef4444]`}
+        >
+          <Trash2 size={k.icon} strokeWidth={2} />
+        </button>
+      </>
     );
   };
 
@@ -235,7 +323,7 @@ export default function Gallery({
       e.stopPropagation(); // don't trigger the image lightbox
       if (authLoading) return; // wait for the session to resolve
       if (!loggedIn) return onRequireLogin();
-      if (!onCopy(id)) return;
+      if (!(await onCopy(id))) return;
       if (figmaUrl) {
         try {
           await navigator.clipboard.writeText(figmaUrl);
@@ -380,7 +468,7 @@ export default function Gallery({
                 className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
               >
                 <div className="relative w-full overflow-hidden rounded-md">
-                  {adminPencil(c.id)}
+                  {adminButtons(c.id)}
                   <div
                     onClick={() =>
                       c.preview_url &&
@@ -418,6 +506,7 @@ export default function Gallery({
           </div>
         ))}
         {renderLightbox()}
+        {renderDeleteModal()}
       </main>
     );
   };
@@ -472,6 +561,7 @@ export default function Gallery({
           </p>
         </div>
         {renderLightbox()}
+        {renderDeleteModal()}
       </main>
     );
   }
@@ -508,7 +598,7 @@ export default function Gallery({
                   className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
                 >
                   <div className="relative w-full overflow-hidden rounded-md">
-                    {adminPencil(c.id, true)}
+                    {adminButtons(c.id, true)}
                     <div
                       onClick={() =>
                         c.preview_url &&
@@ -545,6 +635,7 @@ export default function Gallery({
           </section>
         ))}
         {renderLightbox()}
+        {renderDeleteModal()}
       </main>
     );
   }
@@ -566,7 +657,7 @@ export default function Gallery({
               className="group relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
             >
               <div className="relative w-full overflow-hidden rounded-md">
-                {adminPencil(c.id)}
+                {adminButtons(c.id)}
                 <div
                   onClick={() =>
                     c.preview_url &&
@@ -605,6 +696,7 @@ export default function Gallery({
       ))}
 
       {renderLightbox()}
+      {renderDeleteModal()}
     </main>
   );
 }

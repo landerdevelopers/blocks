@@ -4,6 +4,41 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 
+// Compress + convert to WebP client-side before upload. Returns the new file
+// plus the aspect ratio computed from the (possibly downscaled) canvas.
+async function compressImage(
+  file: File,
+  maxWidth = 2560,
+  quality = 0.9,
+): Promise<{ file: File; aspectRatio: number | null }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, maxWidth / img.width);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const aspectRatio =
+        canvas.width && canvas.height ? canvas.width / canvas.height : null;
+      canvas.toBlob(
+        (blob) => {
+          URL.revokeObjectURL(url);
+          resolve({
+            file: new File([blob!], file.name, { type: "image/webp" }),
+            aspectRatio,
+          });
+        },
+        "image/webp",
+        quality,
+      );
+    };
+    img.src = url;
+  });
+}
+
 const clamp = (n: number) => Math.min(1, Math.max(0, n));
 
 function hsvToHex(h: number, s: number, v: number) {
@@ -306,22 +341,32 @@ export default function UploadForm({
   const submit = async () => {
     if (!canSave || saving) return;
     setError(null);
+    if (!figma.startsWith("https://www.figma.com/")) {
+      setError("Figma URL must start with https://www.figma.com/");
+      return;
+    }
     setSaving(true);
     try {
       // Keep the existing preview/aspect unless a new file was chosen.
       let preview_url = existingPreview;
       let aspect_ratio = existingAspect;
       if (file) {
+        if (file.size > 10 * 1024 * 1024) {
+          setSaving(false);
+          setError("Image must be under 10MB.");
+          return;
+        }
+        // Compress to WebP in the browser, then upload straight to Cloudflare
+        // via a one-time direct-upload URL (no server hop).
+        const { file: compressed, aspectRatio } = await compressImage(file);
+        const res = await fetch("/api/upload-image");
+        const { uploadURL, id } = await res.json();
         const form = new FormData();
-        form.append("file", file);
-        const res = await fetch("/api/upload-image", {
-          method: "POST",
-          body: form,
-        });
-        const up = await res.json();
-        if (!res.ok) throw new Error(up.error || "Image upload failed.");
-        preview_url = up.url;
-        aspect_ratio = up.aspectRatio;
+        form.append("file", compressed);
+        const up = await fetch(uploadURL, { method: "POST", body: form });
+        if (!up.ok) throw new Error("Image upload failed.");
+        preview_url = `https://imagedelivery.net/${process.env.NEXT_PUBLIC_CLOUDFLARE_ACCOUNT_HASH}/${id}/public`;
+        aspect_ratio = aspectRatio;
       }
 
       const dbColors = colors.map((c, i) => ({ hex: c.hex, pct: weights[i] }));

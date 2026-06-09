@@ -213,40 +213,28 @@ function HomeInner() {
     setShowLogin(true);
   };
 
-  // One copy: count it (DB-backed), or show the limit popup once exhausted.
-  // Returns whether the copy is allowed. DB writes run in the background.
-  const tryCopy = (componentId: string) => {
-    if (used >= DAILY_LIMIT) {
-      setShowLimit(true);
+  // One copy: counted + limit-enforced server-side via the record_copy RPC
+  // (security definer). Returns whether the copy is allowed.
+  const tryCopy = async (componentId: string) => {
+    const supabase = createClient();
+    const { data, error } = await supabase.rpc("record_copy", {
+      component_id: componentId,
+    });
+    if (error || !data) {
+      console.error("[copy] record_copy:", error?.message);
       return false;
     }
-    const next = used + 1;
-    setUsed(next);
-
+    if (!data.success) {
+      if (data.reason === "limit_reached") setShowLimit(true);
+      return false;
+    }
+    setUsed(data.copies_today);
     if (profile) {
-      const today = todayIST();
-      const supabase = createClient();
-      // Fire-and-forget: log a copy event (trigger bumps components.copy_count)
-      // and bump the profile's daily counter, in parallel.
-      Promise.all([
-        supabase.from("copy_events").insert({
-          user_id: profile.id,
-          component_id: componentId,
-          date: today,
-        }),
-        supabase
-          .from("profiles")
-          .update({ copies_today: next, last_copy_date: today })
-          .eq("id", profile.id),
-      ])
-        .then(([ce, pr]) => {
-          if (ce.error) console.error("[copy] copy_events:", ce.error.message);
-          if (pr.error) console.error("[copy] profiles:", pr.error.message);
-        })
-        .catch((e) => console.error("[copy] persist failed:", e));
-
-      // Keep the store's profile in sync.
-      setProfile({ ...profile, copies_today: next, last_copy_date: today });
+      setProfile({
+        ...profile,
+        copies_today: data.copies_today,
+        last_copy_date: todayIST(),
+      });
     }
     return true;
   };

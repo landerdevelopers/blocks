@@ -195,6 +195,21 @@ create policy "Components: admin update"
     )
   );
 
+-- components: only admins may delete.
+drop policy if exists "Components: admin delete" on public.components;
+create policy "Components: admin delete"
+  on public.components
+  for delete
+  to authenticated
+  using (
+    exists (
+      select 1
+      from public.profiles p
+      where p.id = auth.uid()
+        and p.role = 'admin'
+    )
+  );
+
 -- copy_events: users may insert and read only their own rows.
 drop policy if exists "Copy events: insert own" on public.copy_events;
 create policy "Copy events: insert own"
@@ -382,5 +397,49 @@ begin
   ) m
   join public.components c on c.id = m.id
   order by m.pct desc nulls last;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- RPC: record_copy(component_id uuid)
+-- Server-side daily copy limit (10/day, IST). SECURITY DEFINER so it can bump
+-- copies_today / last_copy_date even though the profiles RLS policy forbids the
+-- user from updating those columns directly. Logs a copy_events row.
+-- -----------------------------------------------------------------------------
+
+create or replace function public.record_copy(component_id uuid)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  prof profiles%rowtype;
+  today_ist date := (now() at time zone 'Asia/Kolkata')::date;
+begin
+  if uid is null then
+    return json_build_object('success', false, 'reason', 'unauthenticated');
+  end if;
+
+  select * into prof from profiles where id = uid;
+
+  if prof.last_copy_date = today_ist then
+    if prof.copies_today >= 10 then
+      return json_build_object('success', false, 'reason', 'limit_reached');
+    end if;
+  else
+    update profiles set copies_today = 0, last_copy_date = today_ist where id = uid;
+    prof.copies_today := 0;
+  end if;
+
+  update profiles
+  set copies_today = copies_today + 1, last_copy_date = today_ist
+  where id = uid;
+
+  insert into copy_events (user_id, component_id, date)
+  values (uid, component_id, today_ist);
+
+  return json_build_object('success', true, 'copies_today', prof.copies_today + 1);
 end;
 $$;
