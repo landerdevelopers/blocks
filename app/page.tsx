@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Sidebar from "./components/Sidebar";
 import Gallery from "./components/Gallery";
@@ -8,46 +8,39 @@ import LoginModal from "./components/LoginModal";
 import AccountModal from "./components/AccountModal";
 import LimitModal from "./components/LimitModal";
 import { createClient } from "@/lib/supabase/client";
-import { useAuthStore, type Profile } from "@/store/authStore";
+import {
+  useAuthStore,
+  type Profile,
+  type GalleryComponent,
+} from "@/store/authStore";
+import { hexToHsl } from "@/lib/utils";
 import { todayIST } from "@/lib/ist";
 
 const DAILY_LIMIT = 10;
 
-// A component row as returned by the search_by_color RPC (full row incl colors).
-type ColorRow = {
-  id: string;
-  category: string | null;
-  section: string | null;
-  filters: string[] | null;
-  figma_url: string | null;
-  figma_data: string | null;
-  preview_url: string | null;
-  aspect_ratio: number | null;
-  colors: { hex: string; pct: number | null }[] | null;
-};
+type Hsl = { h: number; s: number; l: number };
+const HEX6 = /^#[0-9a-fA-F]{6}$/;
 
-// Best pct among a component's colors that match `hex` within RGB tolerance 100.
-function matchedPct(
+// Family-aware HSL match: does a component color `el` match the search color `s`?
+// Mode is decided from the SEARCH color, mirroring the old search_by_color RPC:
+//   dark/light (l<20 or l>80) or gray (s<10) → lightness only; else hue family.
+function hslMatch(el: Hsl, s: Hsl): boolean {
+  if (s.l < 20 || s.l > 80) return Math.abs(el.l - s.l) <= 15;
+  if (s.s < 10) return Math.abs(el.l - s.l) <= 20;
+  const hueDist = Math.min(Math.abs(el.h - s.h), 360 - Math.abs(el.h - s.h));
+  return (
+    hueDist <= 30 && Math.abs(el.s - s.s) <= 55 && Math.abs(el.l - s.l) <= 40
+  );
+}
+
+// Best pct among a component's colors that match `search`; -1 = no match.
+function bestMatchPct(
   colors: { hex: string; pct: number | null }[] | null,
-  hex: string,
+  search: Hsl,
 ): number {
-  const parse = (h: string) => {
-    const m = /^#?([0-9a-fA-F]{6})$/.exec(h);
-    if (!m) return null;
-    const int = parseInt(m[1], 16);
-    return [(int >> 16) & 255, (int >> 8) & 255, int & 255] as const;
-  };
-  const target = parse(hex);
-  if (!target) return 0;
-  let best = 0;
+  let best = -1;
   for (const c of colors ?? []) {
-    const rgb = parse(c.hex);
-    if (!rgb) continue;
-    if (
-      Math.abs(rgb[0] - target[0]) <= 100 &&
-      Math.abs(rgb[1] - target[1]) <= 100 &&
-      Math.abs(rgb[2] - target[2]) <= 100
-    ) {
+    if (HEX6.test(c.hex) && hslMatch(hexToHsl(c.hex), search)) {
       best = Math.max(best, c.pct ?? 0);
     }
   }
@@ -110,31 +103,31 @@ function HomeInner() {
   });
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
 
+  // Shared in-memory gallery list — color search filters this directly, so it's
+  // instant with no network round-trip.
+  const components = useAuthStore((s) => s.components);
+
   // Color search — overrides the normal gallery list when active.
   const [colorSearchActive, setColorSearchActive] = useState(false);
-  const [colorSearchLoading, setColorSearchLoading] = useState(false);
-  const [colorSearchResults, setColorSearchResults] = useState<
-    ColorRow[] | null
-  >(null);
-  // Remember the picked colors so the search can re-run when the section changes.
+  // Picked colors. Results are derived from these during render (see useMemo).
   const [colorHexes, setColorHexes] = useState<string[]>([]);
 
-  const runColorSearch = async (hexes: string[]) => {
-    setColorHexes(hexes);
-    setColorSearchActive(true);
-    setColorSearchLoading(true);
-    const supabase = createClient();
-    const picked = hexes.slice(0, 2);
-    // Restrict results to the active section's category.
-    const CAT_MAP: Record<string, string> = {
-      website: "Website",
-      mobile: "Mobile Apps",
-      dashboard: "Dashboard",
-      logos: "Logos",
-    };
+  const CAT_MAP: Record<string, string> = {
+    website: "Website",
+    mobile: "Mobile Apps",
+    dashboard: "Dashboard",
+    logos: "Logos",
+  };
+
+  // Filter the in-memory components by the active category + section filters and
+  // the picked color(s). Union over colors (match EITHER), ranked by total
+  // matched pct so components hitting both colors rank highest. Pure, no I/O.
+  const deriveColorResults = (hexes: string[]): GalleryComponent[] => {
+    const picked = hexes.slice(0, 2).filter((h) => HEX6.test(h));
+    if (!picked.length) return [];
+    const searchHsls = picked.map(hexToHsl);
     const dbCat = CAT_MAP[activeCategory ?? "website"];
-    // Also honor the active section filters, mirroring the gallery's filter rules.
-    const matchesFilters = (c: ColorRow) => {
+    const matchesFilters = (c: GalleryComponent) => {
       if (!activeFilters.length) return true;
       if (dbCat === "Logos") {
         return activeFilters.some((f) => (c.filters ?? []).includes(f));
@@ -148,53 +141,45 @@ function HomeInner() {
         return false;
       return true;
     };
-    const lists = await Promise.all(
-      picked.map((h) =>
-        supabase.rpc("search_by_color", { search_hex: h, tolerance: 60 }),
-      ),
-    );
-    const arrays = lists.map((r) =>
-      ((r.data as ColorRow[] | null) ?? []).filter(
-        (c) => c.category === dbCat && matchesFilters(c),
-      ),
-    );
 
-    let result: ColorRow[];
-    if (arrays.length <= 1) {
-      result = arrays[0] ?? [];
-    } else {
-      // Union: show components matching EITHER color. Dedupe by id, then sort by
-      // total matched pct so components hitting both colors rank highest.
-      const byId = new Map<string, ColorRow>();
-      for (const c of [...arrays[0], ...arrays[1]]) {
-        if (!byId.has(c.id)) byId.set(c.id, c);
+    const scored: { c: GalleryComponent; score: number }[] = [];
+    for (const c of components) {
+      if (c.category !== dbCat || !matchesFilters(c)) continue;
+      let score = 0;
+      let hit = false;
+      for (const sh of searchHsls) {
+        const p = bestMatchPct(c.colors, sh);
+        if (p >= 0) {
+          hit = true;
+          score += p;
+        }
       }
-      result = [...byId.values()]
-        .map((c) => ({
-          c,
-          score:
-            matchedPct(c.colors, picked[0]) + matchedPct(c.colors, picked[1]),
-        }))
-        .sort((x, y) => y.score - x.score)
-        .map((x) => x.c);
+      if (hit) scored.push({ c, score });
     }
-    setColorSearchResults(result);
-    setColorSearchLoading(false);
+    return scored.sort((a, b) => b.score - a.score).map((x) => x.c);
+  };
+
+  // Results derived during render — instant, and auto-recomputes whenever the
+  // picked colors, the active section/filters, or the in-memory components
+  // change (e.g. the background fetch populates colors). No effect, no network.
+  const colorSearchResults = useMemo(
+    () =>
+      colorSearchActive && colorHexes.length
+        ? deriveColorResults(colorHexes)
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [colorSearchActive, colorHexes, components, activeCategory, activeFilters],
+  );
+
+  const runColorSearch = (hexes: string[]) => {
+    setColorHexes(hexes);
+    setColorSearchActive(true);
   };
 
   const clearColorSearch = () => {
     setColorSearchActive(false);
-    setColorSearchResults(null);
-    setColorSearchLoading(false);
     setColorHexes([]);
   };
-
-  // Re-run the active color search whenever the section or its filters change,
-  // so results reflect the current selection instead of staying stale.
-  useEffect(() => {
-    if (colorSearchActive && colorHexes.length) runColorSearch(colorHexes);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCategory, activeFilters.join(",")]);
 
   // Persist the active category so it's known synchronously on next load.
   useEffect(() => {
@@ -298,6 +283,9 @@ function HomeInner() {
         onFilter={(id, filters) => {
           setActiveCategory(id);
           setActiveFilters(filters);
+          // Logos aren't color-searchable — drop any active color search so the
+          // logos list shows instead of stale color results.
+          if (id === "logos") clearColorSearch();
           // Column count stays the same across contexts. Non-logos caps at 5,
           // so only clamp down when leaving logos while at 6. Logos has a min
           // of 2, so clamp up when entering it at 1.
@@ -308,6 +296,7 @@ function HomeInner() {
         minCols={activeCategory === "logos" ? 2 : 1}
         onColorSearch={runColorSearch}
         onColorClear={clearColorSearch}
+        activeCategory={activeCategory}
       />
       <Gallery
         cols={cols}
@@ -317,7 +306,6 @@ function HomeInner() {
         category={activeCategory}
         filters={activeFilters}
         colorSearchActive={colorSearchActive}
-        colorSearchLoading={colorSearchLoading}
         colorSearchResults={colorSearchResults}
       />
 

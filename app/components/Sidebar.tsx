@@ -146,12 +146,8 @@ function SectionCard({
   const sectionCount = (label: string) =>
     catComps.filter((c) => c.section === label).length;
 
-  const Header = (
-    <button
-      type="button"
-      onClick={onToggle}
-      className="flex w-full cursor-pointer items-center justify-between"
-    >
+  const headerInner = (
+    <>
       <div className="flex items-center gap-1">
         <span className="text-base font-medium leading-none tracking-[-0.03em] text-[#09090b]">
           {section.label}
@@ -167,27 +163,40 @@ function SectionCard({
           open ? "rotate-180" : ""
         }`}
       />
-    </button>
+    </>
   );
 
-  // Simple row (no expandable content)
+  // Simple row (no expandable content) — button spans full padded area.
   if (!hasContent) {
     return (
-      <div className="w-full rounded-lg bg-white px-3 py-2">{Header}</div>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full cursor-pointer items-center justify-between rounded-lg bg-white px-3 py-2"
+      >
+        {headerInner}
+      </button>
     );
   }
 
   return (
-    <div className="flex w-full flex-col rounded-[10px] border border-[#e7e9ee] bg-white p-3">
-      {Header}
+    <div className="flex w-full flex-col rounded-[10px] border border-[#e7e9ee] bg-white">
+      {/* Header button covers full card width incl. padding */}
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full cursor-pointer items-center justify-between px-3 py-3"
+      >
+        {headerInner}
+      </button>
       {/* Collapsible body — animates via grid-rows */}
       <div
-        className={`grid transition-all duration-300 ease-in-out ${
-          open ? "mt-3.5 grid-rows-[1fr]" : "grid-rows-[0fr]"
+        className={`grid px-3 transition-all duration-300 ease-in-out ${
+          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
         }`}
       >
         <div className="overflow-hidden">
-          <div className="flex flex-col gap-3.5">
+          <div className="flex flex-col gap-3.5 pb-3">
             {section.tags && (
               <div className="flex w-full flex-wrap content-start gap-3.5">
                 {section.tags.map((t) => {
@@ -265,6 +274,7 @@ export default function Sidebar({
   onFilter,
   onColorSearch,
   onColorClear,
+  activeCategory,
 }: {
   cols: number;
   onColsChange: (n: number) => void;
@@ -276,6 +286,9 @@ export default function Sidebar({
   onFilter: (sectionId: string | null, filters: string[]) => void;
   onColorSearch?: (colors: string[]) => void;
   onColorClear?: () => void;
+  // The category the gallery is currently showing (may differ from the open
+  // accordion — a closed accordion still shows the last-opened category).
+  activeCategory?: string | null;
 }) {
   const profile = useAuthStore((s) => s.profile);
   const authLoading = useAuthStore((s) => s.authLoading);
@@ -381,8 +394,32 @@ export default function Sidebar({
             />
           ))}
 
-          {/* Color search */}
-          <ColorSearch onSearch={onColorSearch} onClear={onColorClear} />
+          {/* Color search — hidden for Logos (logos aren't color-searchable).
+              Gate on the gallery's active category, not the open accordion: a
+              closed Logos accordion still shows logos, so the bar stays hidden.
+              Animated via grid-rows (height) + scale/opacity (pop); -mt cancels
+              the parent gap while collapsed so nothing leaves a hole. Keyed so
+              it remounts fresh (clears picked swatches) when it returns. */}
+          {(() => {
+            const show = activeCategory !== "logos";
+            return (
+              <div
+                className={`grid shrink-0 transition-all duration-300 ${
+                  show
+                    ? "grid-rows-[1fr] scale-100 opacity-100 ease-[cubic-bezier(0.34,1.56,0.64,1)]"
+                    : "pointer-events-none -mt-4.5 grid-rows-[0fr] scale-90 opacity-0 ease-out"
+                }`}
+              >
+                <div className="overflow-hidden">
+                  <ColorSearch
+                    key={show ? "color-search-on" : "color-search-off"}
+                    onSearch={onColorSearch}
+                    onClear={onColorClear}
+                  />
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Layout setting */}
           <div className="flex w-full shrink-0 flex-col gap-3 rounded-xl border border-[#e7e9ee] bg-white p-3">

@@ -23,6 +23,8 @@ export type GalleryComponent = {
   figma_data: string | null;
   preview_url: string | null;
   aspect_ratio: number | null;
+  // Per-color {hex, pct} array — powers client-side color search.
+  colors: { hex: string; pct: number | null }[] | null;
 };
 
 type AuthState = {

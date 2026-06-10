@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
+import { hexToHsl } from "@/lib/utils";
 
 // Compress + convert to WebP client-side before upload. Returns the new file
 // plus the aspect ratio computed from the (possibly downscaled) canvas.
@@ -404,6 +405,8 @@ export default function UploadForm({
       }
 
       const dbColors = colors.map((c, i) => ({ hex: c.hex, pct: weights[i] }));
+      // Same array + precomputed HSL, consumed by search_by_color's fast path.
+      const colors_hsl = dbColors.map((c) => ({ ...c, ...hexToHsl(c.hex) }));
       const payload = {
         category: UI_TO_DB[category],
         section: sections.length > 0 ? section : null,
@@ -414,6 +417,7 @@ export default function UploadForm({
         preview_url,
         aspect_ratio,
         colors: dbColors,
+        colors_hsl,
       };
 
       const query = componentId
@@ -444,6 +448,7 @@ export default function UploadForm({
           figma_data: c.figma_data,
           preview_url: c.preview_url,
           aspect_ratio: c.aspect_ratio,
+          colors: c.colors,
         } as GalleryComponent);
       }
       onSuccess?.(data as SavedComponent);

@@ -102,7 +102,7 @@ export default function Gallery({
     let alive = true;
     createClient()
       .from("components")
-      .select("id, category, section, filters, figma_url, figma_data, preview_url, aspect_ratio")
+      .select("id, category, section, filters, figma_url, figma_data, preview_url, aspect_ratio, colors")
       .eq("is_published", true)
       .order("created_at", { ascending: false })
       .then(({ data }) => {
@@ -359,7 +359,10 @@ export default function Gallery({
         className={`pointer-events-none absolute z-10 opacity-0 transition-[opacity,translate] duration-300 ease-out group-hover:opacity-100 ${
           cfg.pos === "tr"
             ? "right-6 top-6 -translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
-            : "bottom-6 left-1/2 -translate-x-1/2 translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
+            : `${
+                // Logos (dark) at layout 4/5/6 sit a little lower in the card.
+                dark && cols >= 4 ? "bottom-3" : "bottom-6"
+              } left-1/2 -translate-x-1/2 translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0`
         }`}
       >
         <div className="relative">
@@ -616,16 +619,12 @@ export default function Gallery({
                   <div className="relative w-full overflow-hidden rounded-md">
                     {adminButtons(c.id, true)}
                     <div
-                      onClick={() =>
-                        c.preview_url &&
-                        setLightbox({ src: c.preview_url, logo: true })
-                      }
-                      className="relative flex w-full cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-[#e7e9ee] bg-white"
+                      className="relative flex w-full items-center justify-center overflow-hidden rounded-md border border-[#e7e9ee] bg-white"
                       style={{
                         aspectRatio:
                           n >= 6 ? "3 / 4" : n >= 5 ? "4 / 5" : n >= 3 ? "1 / 1" : "5 / 4",
                         padding:
-                          n >= 6 ? 16 : n >= 5 ? 24 : n >= 4 ? 32 : n >= 3 ? 48 : 72,
+                          n >= 6 ? 16 : n >= 5 ? 24 : n >= 4 ? 40 : n >= 3 ? 48 : 72,
                       }}
                     >
                       {/* Placeholder fills the whole card (ignores padding). */}

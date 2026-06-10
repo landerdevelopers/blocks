@@ -39,6 +39,11 @@ create table if not exists public.components (
   aspect_ratio numeric,
   -- Array of objects, e.g. [{"hex": "#3B82F6", "pct": 60}]
   colors       jsonb,
+  -- Same array with HSL precomputed at upload time, e.g.
+  -- [{"hex": "#3B82F6", "pct": 60, "h": 217, "s": 91, "l": 60}]. Lets
+  -- search_by_color skip per-row hex->HSL conversion. Null for rows uploaded
+  -- before this column existed (search falls back to on-the-fly conversion).
+  colors_hsl   jsonb,
   uploaded_by  uuid references public.profiles (id) on delete set null,
   is_published boolean     not null default true,
   created_at   timestamptz not null default now(),
@@ -59,6 +64,8 @@ create table if not exists public.copy_events (
 create index if not exists components_category_idx   on public.components (category);
 create index if not exists components_published_idx  on public.components (is_published);
 create index if not exists components_filters_idx    on public.components using gin (filters);
+create index if not exists components_colors_gin_idx  on public.components using gin (colors jsonb_path_ops);
+create index if not exists components_colors_hsl_gin_idx on public.components using gin (colors_hsl jsonb_path_ops);
 create index if not exists copy_events_user_idx      on public.copy_events (user_id);
 create index if not exists copy_events_component_idx on public.copy_events (component_id);
 
@@ -337,6 +344,9 @@ $$;
 -- lightness within 40. The `tolerance` param is ignored (kept for signature
 -- compatibility). Returns matching published components, highest pct first.
 -- STABLE; handles null/malformed input and null colors gracefully.
+-- Reads precomputed HSL from components.colors_hsl (set at upload time) to skip
+-- per-row hex->HSL conversion; legacy rows with null colors_hsl fall back to
+-- converting colors[].hex on the fly so they still appear in results.
 -- -----------------------------------------------------------------------------
 
 create or replace function public.search_by_color(search_hex text, tolerance int)
@@ -379,21 +389,36 @@ begin
            comp.id,
            (elem ->> 'pct')::numeric as pct
     from public.components comp
-    cross join lateral jsonb_array_elements(comp.colors) as elem
-    cross join lateral public.hsl_from_hex(elem ->> 'hex') as eh
+    -- Prefer the precomputed colors_hsl array; legacy rows (null colors_hsl)
+    -- fall back to the raw colors array + on-the-fly hex->HSL below.
+    cross join lateral
+      jsonb_array_elements(coalesce(comp.colors_hsl, comp.colors)) as elem
+    -- Element HSL: read precomputed h/s/l when present (fast path), otherwise
+    -- convert the hex (CASE short-circuits, so hsl_from_hex is only called for
+    -- legacy elements). eh = [h, s, l].
+    cross join lateral (
+      select case
+        when elem ? 'h' then array[
+          (elem ->> 'h')::numeric,
+          (elem ->> 's')::numeric,
+          (elem ->> 'l')::numeric
+        ]
+        else public.hsl_from_hex(elem ->> 'hex')
+      end as eh
+    ) hv
     where comp.is_published = true
-      and comp.colors is not null
-      and jsonb_typeof(comp.colors) = 'array'
-      and eh is not null
+      and coalesce(comp.colors_hsl, comp.colors) is not null
+      and jsonb_typeof(coalesce(comp.colors_hsl, comp.colors)) = 'array'
+      and hv.eh is not null
       and (
         -- Dark / light / gray families: match by lightness only (any hue/sat).
-        (lonly and abs(eh[3] - sl) <= ltol)
+        (lonly and abs(hv.eh[3] - sl) <= ltol)
         -- Normal colorful range: hue within 30deg (circular), sat +-40, light +-40.
         or (
           not lonly
-          and least(abs(eh[1] - sh), 360 - abs(eh[1] - sh)) <= 30
-          and abs(eh[2] - ss) <= 40
-          and abs(eh[3] - sl) <= 40
+          and least(abs(hv.eh[1] - sh), 360 - abs(hv.eh[1] - sh)) <= 30
+          and abs(hv.eh[2] - ss) <= 40
+          and abs(hv.eh[3] - sl) <= 40
         )
       )
     order by comp.id, (elem ->> 'pct')::numeric desc nulls last
