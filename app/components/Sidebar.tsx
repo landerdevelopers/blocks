@@ -20,8 +20,6 @@ type Comp = {
   filters: string[] | null;
 };
 
-// Asset URLs sourced from Figma (remote, expire ~7 days).
-const imgVectorLogo = "https://www.figma.com/api/mcp/asset/e43c5089-51a7-45fe-8bd2-b63a7d3b1c34";
 
 type Tag = { label: string };
 type Section = {
@@ -371,7 +369,7 @@ export default function Sidebar({
                   className="group flex items-center gap-1.5"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img alt="" src={imgVectorLogo} className="h-[13.6px] w-[10.7px]" />
+                  <img alt="Lander Studio" src="/Lander_black.png" className="h-[13.6px] w-[10.7px]" />
                   <span className="text-sm font-medium tracking-[-0.03em] text-[#09090b] group-hover:underline">
                     Lander Studio
                   </span>
