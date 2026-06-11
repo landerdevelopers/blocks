@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, Plus, Minus } from "lucide-react";
+import { ChevronDown, Plus, Minus, User, LogOut } from "lucide-react";
 import ColorSearch from "./ColorSearch";
 import { useAuthStore } from "@/store/authStore";
 import { createClient } from "@/lib/supabase/client";
@@ -22,8 +22,6 @@ type Comp = {
 
 // Asset URLs sourced from Figma (remote, expire ~7 days).
 const imgVectorLogo = "https://www.figma.com/api/mcp/asset/e43c5089-51a7-45fe-8bd2-b63a7d3b1c34";
-const imgLoginUser = "https://www.figma.com/api/mcp/asset/bd04080a-ebbb-4c22-b15b-9d6f989a987b";
-const imgLoginArrow = "https://www.figma.com/api/mcp/asset/e2316c41-86b0-444b-a898-f01386376988";
 
 type Tag = { label: string };
 type Section = {
@@ -524,14 +522,12 @@ export default function Sidebar({
           className="mt-2.5 flex w-full shrink-0 cursor-pointer items-center justify-between rounded-[10px] border border-[#e7e9ee] bg-[rgba(123,113,113,0.05)] px-3 py-2 transition-colors hover:bg-[rgba(123,113,113,0.08)]"
         >
           <div className="flex items-center gap-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img alt="" src={imgLoginUser} className="size-[18px]" />
+            <User size={18} strokeWidth={1.5} className="text-[#71717b]" />
             <span className="text-base tracking-[-0.03em] text-[#71717b]">
               Login to Copy
             </span>
           </div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img alt="" src={imgLoginArrow} className="size-4" />
+          <LogOut size={16} strokeWidth={1.5} className="text-[#71717b]" />
         </button>
       )}
     </aside>

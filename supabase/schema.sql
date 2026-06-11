@@ -131,6 +131,28 @@ create trigger on_copy_event_inserted
   execute function public.increment_copy_count();
 
 -- -----------------------------------------------------------------------------
+-- Grants
+-- Table privileges are checked BEFORE row-level security. Without these the
+-- onboarding upsert fails with "permission denied for table profiles" even
+-- though the RLS policies below would allow the row. Roles are Supabase's
+-- built-in `anon` (logged-out) and `authenticated` (logged-in) API roles.
+-- -----------------------------------------------------------------------------
+
+grant usage on schema public to anon, authenticated;
+
+-- profiles: a logged-in user manages only their own row (RLS scopes it to
+-- auth.uid()). anon needs no access.
+grant select, insert, update on public.profiles to authenticated;
+
+-- components: everyone may read (published-only via RLS); writes are admin-only
+-- (gated by the policies below).
+grant select on public.components to anon, authenticated;
+grant insert, update, delete on public.components to authenticated;
+
+-- copy_events: a logged-in user inserts/reads their own copy log.
+grant select, insert on public.copy_events to authenticated;
+
+-- -----------------------------------------------------------------------------
 -- Row Level Security
 -- -----------------------------------------------------------------------------
 

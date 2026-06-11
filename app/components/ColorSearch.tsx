@@ -2,12 +2,9 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Plus } from "lucide-react";
+import { Plus, Palette } from "lucide-react";
 
 const POP_W = 225;
-
-// Asset URLs sourced from Figma (remote, expire ~7 days).
-const imgPalette = "https://www.figma.com/api/mcp/asset/40efe4f1-8196-4315-a479-834937cbd0b3";
 
 function hsvToHex(h: number, s: number, v: number) {
   const c = v * s;
@@ -208,8 +205,7 @@ export default function ColorSearch({
       className="relative flex w-full shrink-0 items-center justify-between rounded-full border border-[#e7e9ee] bg-white p-1.5"
     >
       <div className="flex items-center justify-center gap-1 rounded-full bg-[#f5f5f5] py-1.5 pl-1.5 pr-2.5">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img alt="" src={imgPalette} className="size-4" />
+        <Palette size={16} strokeWidth={1.5} className="text-[#71717b]" />
         <span className="text-sm tracking-[-0.03em] text-[#71717b]">
           Color Search
         </span>
