@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -126,9 +125,10 @@ export default function Gallery({
   const setIsFetchingMore = useAuthStore((s) => s.setIsFetchingMore);
   const appendComponents = useAuthStore((s) => s.appendComponents);
 
-  // Sentinels watched by IntersectionObservers; `scrollRef` is the scroll
-  // container used as the observer root.
-  const sentinelRef = useRef<HTMLDivElement>(null);
+  // `firstSkeletonRef` is the FIRST skeleton card (or its fallback) — the normal
+  // observer watches it directly. `colorSentinelRef` drives color-search paging.
+  // `scrollRef` is the scroll container (used to check if content fills it).
+  const firstSkeletonRef = useRef<HTMLDivElement>(null);
   const colorSentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
 
@@ -326,38 +326,44 @@ export default function Gallery({
 
   // Infinite scroll for the normal gallery — load the next page when the
   // sentinel nears the bottom. Disabled while color search is active (color
-  // search paginates separately, over its own sentinel). The sentinel sits at
-  // the top of the skeleton area (not the very bottom) and the rootMargin is a
-  // generous 600px, so the next page fetches well before the user scrolls down
-  // — by the time they reach it, the images are already loaded. `root` is the
-  // scrollable <main> (scrollRef), not the viewport.
+  // search paginates separately). Observes the FIRST skeleton card directly —
+  // the moment it scrolls into view (10% visible) the next page is fetched.
+  // No explicit root: the default (viewport) still accounts for clipping by the
+  // scrollable <main>, so it works regardless of layout / column count.
   useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
+    const el = firstSkeletonRef.current;
+    if (!el || !hasMore || isFetching || colorSearchActive) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (
-          entries[0].isIntersecting &&
-          hasMore &&
-          !isFetching &&
-          !colorSearchActive
-        ) {
+        if (entries[0].isIntersecting) {
           fetchPage(currentPage + 1);
         }
       },
-      { root: scrollRef.current, rootMargin: "600px" },
+      { threshold: 0.1 },
     );
     observer.observe(el);
     return () => observer.disconnect();
   }, [
     hasMore,
-    currentPage,
     isFetching,
+    currentPage,
     colorSearchActive,
-    category,
-    filtered.length,
+    components.length,
+    categoryCounts,
     fetchPage,
   ]);
+
+  // After a page loads, if the content doesn't fill the scroll container (so the
+  // user can't scroll to reveal the next sentinel), fetch the next page eagerly
+  // until it's scrollable or there's nothing more.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !hasMore || isFetching || colorSearchActive) return;
+    if (el.scrollHeight <= el.clientHeight) {
+      fetchPage(currentPage + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [components.length, hasMore, isFetching, currentPage, colorSearchActive]);
 
   // Infinite scroll for color search — reveal the next slice of RPC results.
   useEffect(() => {
@@ -978,7 +984,9 @@ export default function Gallery({
             ))}
           </div>
         )}
-        <div ref={sentinelRef} style={{ height: 1 }} />
+        {/* Logos has no remaining-slot skeletons — observe a bottom target so
+            infinite scroll works whether idle or loading. */}
+        <div ref={firstSkeletonRef} style={{ height: 1 }} />
         {endReached && endMarker}
         {renderLightbox()}
         {renderDeleteModal()}
@@ -1075,28 +1083,25 @@ export default function Gallery({
               </div>
             </div>
           ))}
-          {/* When there are no skeletons (e.g. counts not loaded yet), keep the
-              sentinel reachable so infinite scroll still triggers. */}
+          {/* No skeletons (e.g. counts not loaded yet) → keep the observer
+              target reachable so infinite scroll still triggers. */}
           {i === 0 && skBuckets[i].length === 0 && (
-            <div ref={sentinelRef} style={{ height: 1 }} />
+            <div ref={firstSkeletonRef} style={{ height: 1 }} />
           )}
           {skBuckets[i].map((pb, k) => (
-            <Fragment key={`sk-${k}`}>
-              <div className="relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]">
-                <div className="relative w-full overflow-hidden rounded-md border border-[#e7e9ee]">
-                  <div
-                    className="skeleton-shimmer relative w-full rounded-md"
-                    style={{ paddingBottom: pb }}
-                  />
-                </div>
+            <div
+              key={`sk-${k}`}
+              // The observer watches the very first skeleton card directly.
+              ref={i === 0 && k === 0 ? firstSkeletonRef : undefined}
+              className="relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
+            >
+              <div className="relative w-full overflow-hidden rounded-md border border-[#e7e9ee]">
+                <div
+                  className="skeleton-shimmer relative w-full rounded-md"
+                  style={{ paddingBottom: pb }}
+                />
               </div>
-              {/* Trigger the next-page fetch after the FIRST row of skeletons
-                  (first skeleton of the first column), not at the very bottom —
-                  combined with the 600px rootMargin it prefetches early. */}
-              {i === 0 && k === 0 && (
-                <div ref={sentinelRef} style={{ height: 1 }} />
-              )}
-            </Fragment>
+            </div>
           ))}
         </div>
       ))}
