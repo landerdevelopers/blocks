@@ -380,7 +380,7 @@ export default function Sidebar({
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img alt="Lander Studio" src="/Lander_black.png" className="h-[13.6px] w-[10.7px]" />
-                  <span className="text-sm font-medium tracking-[-0.03em] text-[#09090b] group-hover:underline">
+                  <span className="text-base font-medium tracking-[-0.03em] text-[#09090b] group-hover:underline">
                     Lander Studio
                   </span>
                 </a>

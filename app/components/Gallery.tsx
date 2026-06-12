@@ -9,7 +9,7 @@ import {
   type MouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { Pencil, Trash2 } from "lucide-react";
+import { Megaphone, Pencil, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 import {
@@ -131,29 +131,10 @@ export default function Gallery({
   const colorSentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
 
-  // Seed the store from this category's cache SYNCHRONOUSLY (before first paint)
-  // so a refresh shows cached cards on render 1 — no blank frame, no effect lag.
-  // Guarded by a ref so it runs once; category switches are handled by the
-  // effect below.
-  const seedCat = category ?? "website";
-  const [initialCache] = useState(() => {
-    if (typeof window === "undefined") return null;
-    try {
-      return readComponentsCache(seedCat);
-    } catch {
-      return null;
-    }
-  });
-  const cacheSeeded = useRef(false);
-  if (!cacheSeeded.current && initialCache) {
-    cacheSeeded.current = true;
-    setComponents(initialCache.data);
-    // Seed this category's total too, so render 1 can show skeleton slots for
-    // the components beyond the cached page.
-    if (initialCache.total) {
-      setCategoryCounts({ [CAT_MAP[seedCat]]: initialCache.total });
-    }
-  }
+  // The store is seeded from this category's cache in the mount/category effect
+  // below (not during render — that would setState mid-render and update other
+  // subscribers like AuthProvider). The `mounted` gate shows a skeleton on the
+  // first paint, so there's no blank frame while that effect runs.
 
   // Category used for FILTERING the on-screen list. It lags `category` by one
   // render on a switch: the effect below updates it only AFTER the store has
@@ -673,6 +654,39 @@ export default function Gallery({
     );
   };
 
+  // Announcement banner — sits at the top of the gallery content and scrolls
+  // away with it (not pinned).
+  const banner = (
+    <div className="mb-3.5 shrink-0">
+      <div className="flex h-[34px] w-[667px] max-w-full items-center gap-2 rounded-[10px] border border-[#e7e9ee] bg-[#F0F1F2] px-2.5 py-2">
+        <Megaphone
+          size={16}
+          strokeWidth={1.5}
+          className="shrink-0 text-[#4D4D4D]"
+        />
+        <span className="truncate text-[14px] tracking-[-0.03em] text-[#4D4D4D]">
+          We&apos;re constantly adding new designs, so come back often to explore
+          fresh resources and ideas blink 😉
+        </span>
+      </div>
+    </div>
+  );
+
+  // End-of-list marker — shown once every page is loaded (hasMore === false).
+  // Two small squares flank the label, with gradient lines fading outward.
+  const endReached = !hasMore && !isFetching && filtered.length > 0;
+  const endMarker = (
+    <div className="flex shrink-0 items-center justify-center px-4 pt-10 pb-24">
+      <div className="h-0 w-[88px] border-t border-solid [border-image:linear-gradient(to_left,#E7E9EE,transparent)_1]" />
+      <div className="size-2.5 shrink-0 rounded-[2px] border border-[#E7E9EE] bg-white" />
+      <span className="whitespace-nowrap px-2.5 text-[18px] tracking-[-0.03em] text-[#71717b]">
+        More coming soon
+      </span>
+      <div className="size-2.5 shrink-0 rounded-[2px] border border-[#E7E9EE] bg-white" />
+      <div className="h-0 w-[88px] border-t border-solid [border-image:linear-gradient(to_right,#E7E9EE,transparent)_1]" />
+    </div>
+  );
+
   const renderLightbox = () =>
     lightbox && typeof document !== "undefined"
       ? createPortal(
@@ -724,7 +738,8 @@ export default function Gallery({
     );
     list.forEach((c, i) => buckets[i % buckets.length].push(c));
     return (
-      <main ref={scrollRef} suppressHydrationWarning className="flex h-full flex-1 flex-col overflow-y-auto rounded-tl-[22px] bg-white p-4">
+      <main ref={scrollRef} suppressHydrationWarning className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4">
+        {banner}
         <div className="flex flex-1 items-start gap-3.5">
         {buckets.map((col, i) => (
           <div key={i} className="flex flex-1 flex-col gap-3.5">
@@ -797,7 +812,8 @@ export default function Gallery({
       ph[ci].push(`${getSkeletonRatio(ci, ph[ci].length) * 100}%`);
     }
     return (
-      <main className="flex h-full flex-1 flex-col overflow-y-auto rounded-tl-[22px] bg-white p-4">
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4">
+        {banner}
         <div className="flex flex-1 items-start gap-3.5">
           {ph.map((col, i) => (
             <div key={i} className="flex flex-1 flex-col gap-3.5">
@@ -825,7 +841,7 @@ export default function Gallery({
   if (colorSearchActive) {
     if (colorSearchLoading) {
       return (
-        <main className="flex h-full flex-1 items-center justify-center rounded-tl-[22px] bg-white p-4">
+        <main className="flex min-h-0 flex-1 items-center justify-center bg-white p-4">
           <div className="size-8 animate-spin rounded-full border-2 border-[#e4e4e7] border-t-[#2974ff]" />
         </main>
       );
@@ -833,7 +849,7 @@ export default function Gallery({
     const results = colorSearchResults ?? [];
     if (results.length === 0) {
       return (
-        <main className="flex h-full flex-1 items-center justify-center rounded-tl-[22px] bg-white p-4">
+        <main className="flex min-h-0 flex-1 items-center justify-center bg-white p-4">
           <div className="flex max-w-md flex-col items-center gap-0 text-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img alt="" src="/NoColor.png" className="size-65 object-contain" />
@@ -853,7 +869,7 @@ export default function Gallery({
 
   if (empty) {
     return (
-      <main className="flex h-full flex-1 items-center justify-center rounded-tl-[22px] bg-white p-4">
+      <main className="flex min-h-0 flex-1 items-center justify-center bg-white p-4">
         <div className="flex max-w-md flex-col items-center gap-0 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt="" src="/NoColor.png" className="size-65 object-contain" />
@@ -879,7 +895,8 @@ export default function Gallery({
     });
 
     return (
-      <main ref={scrollRef} suppressHydrationWarning className="flex h-full flex-1 flex-col gap-6 overflow-y-auto rounded-tl-[22px] bg-white p-4">
+      <main ref={scrollRef} suppressHydrationWarning className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto bg-white p-4">
+        {banner}
         {groups.map(({ letter, items }) => (
           <section key={letter} className="flex flex-col gap-3.5">
             <div className="flex items-center gap-3">
@@ -906,7 +923,7 @@ export default function Gallery({
                         // Square for layouts 3-6; layout 2 stays slightly wide.
                         aspectRatio: n >= 3 ? "1 / 1" : "5 / 4",
                         padding:
-                          n >= 6 ? 16 : n >= 5 ? 24 : n >= 4 ? 40 : n >= 3 ? 48 : 72,
+                          n >= 6 ? 38 : n >= 5 ? 36 : n >= 4 ? 40 : n >= 3 ? 48 : 72,
                       }}
                     >
                       {/* Placeholder fills the whole card (ignores padding). */}
@@ -957,6 +974,7 @@ export default function Gallery({
           </div>
         )}
         <div ref={sentinelRef} style={{ height: 1 }} />
+        {endReached && endMarker}
         {renderLightbox()}
         {renderDeleteModal()}
       </main>
@@ -1000,7 +1018,8 @@ export default function Gallery({
   }
 
   return (
-    <main ref={scrollRef} suppressHydrationWarning className="flex h-full flex-1 flex-col overflow-y-auto rounded-tl-[22px] bg-white p-4">
+    <main ref={scrollRef} suppressHydrationWarning className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4">
+      {banner}
       <div className="flex flex-1 items-start gap-3.5">
       {buckets.map((col, i) => (
         <div key={i} className="flex flex-1 flex-col gap-3.5">
@@ -1068,6 +1087,7 @@ export default function Gallery({
       ))}
       </div>
       <div ref={sentinelRef} style={{ height: 1 }} />
+      {endReached && endMarker}
       {renderLightbox()}
       {renderDeleteModal()}
     </main>

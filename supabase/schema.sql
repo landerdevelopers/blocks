@@ -60,6 +60,15 @@ create table if not exists public.copy_events (
   date         date        not null default current_date
 );
 
+-- Improvement suggestions submitted from the "Suggest Improvements" modal.
+-- user_id is null for logged-out submitters.
+create table if not exists public.improvements (
+  id         uuid primary key default gen_random_uuid(),
+  message    text not null,
+  user_id    uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
 -- Helpful indexes for the common access paths.
 create index if not exists components_category_idx   on public.components (category);
 create index if not exists components_published_idx  on public.components (is_published);
@@ -156,9 +165,10 @@ grant select, insert on public.copy_events to authenticated;
 -- Row Level Security
 -- -----------------------------------------------------------------------------
 
-alter table public.profiles    enable row level security;
-alter table public.components  enable row level security;
-alter table public.copy_events enable row level security;
+alter table public.profiles     enable row level security;
+alter table public.components   enable row level security;
+alter table public.copy_events  enable row level security;
+alter table public.improvements enable row level security;
 
 -- profiles: users may read, insert, and update only their own row.
 drop policy if exists "Profiles: select own" on public.profiles;
@@ -256,6 +266,33 @@ create policy "Copy events: select own"
   for select
   to authenticated
   using (auth.uid() = user_id);
+
+-- improvements: anyone (incl. anon) may submit a non-empty message; a logged-in
+-- submitter may only attach their own user_id.
+drop policy if exists "Improvements: insert any" on public.improvements;
+create policy "Improvements: insert any"
+  on public.improvements
+  for insert
+  to anon, authenticated
+  with check (
+    char_length(btrim(message)) > 0
+    and (user_id is null or user_id = auth.uid())
+  );
+
+-- improvements: only admins may read submissions.
+drop policy if exists "Improvements: admin select" on public.improvements;
+create policy "Improvements: admin select"
+  on public.improvements
+  for select
+  to authenticated
+  using (
+    exists (
+      select 1
+      from public.profiles p
+      where p.id = auth.uid()
+        and p.role = 'admin'
+    )
+  );
 
 -- -----------------------------------------------------------------------------
 -- Storage: public "avatars" bucket. Authenticated users may only write into a

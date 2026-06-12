@@ -15,6 +15,7 @@ import {
 } from "@/store/authStore";
 import { hexToHsl } from "@/lib/utils";
 import { todayIST } from "@/lib/ist";
+import { Textarea } from "@/components/ui/textarea";
 
 const DAILY_LIMIT = 10;
 
@@ -115,6 +116,10 @@ function HomeInner() {
   const [showAccount, setShowAccount] = useState(false);
   const [used, setUsed] = useState(0);
   const [showLimit, setShowLimit] = useState(false);
+  const [showSuggest, setShowSuggest] = useState(false);
+  const [suggestText, setSuggestText] = useState("");
+  const [suggestSubmitting, setSuggestSubmitting] = useState(false);
+  const [showSuggestSuccess, setShowSuggestSuccess] = useState(false);
   // Active sidebar selection — drives which components the gallery shows.
   // Persisted so the correct category (and its column count) is known on refresh.
   const [activeCategory, setActiveCategory] = useState<string | null>(
@@ -325,6 +330,24 @@ function HomeInner() {
     return () => clearInterval(id);
   }, [profile, setProfile]);
 
+  // Save an improvement suggestion to the DB, then close the modal.
+  const submitSuggestion = async () => {
+    const message = suggestText.trim();
+    if (!message || suggestSubmitting) return;
+    setSuggestSubmitting(true);
+    const { error } = await createClient()
+      .from("improvements")
+      .insert({ message, user_id: profile?.id ?? null });
+    setSuggestSubmitting(false);
+    if (error) {
+      console.error("[suggest] insert:", error.message);
+      return;
+    }
+    setShowSuggest(false);
+    setSuggestText("");
+    setShowSuggestSuccess(true);
+  };
+
   // On a fresh onboarding redirect, keep the homepage hidden until auth resolves
   // (the onboarding modal renders on top via its own portal). Zero flash.
   if (onboardingRedirect && authLoading) {
@@ -360,19 +383,23 @@ function HomeInner() {
         onColorClear={clearColorSearch}
         activeCategory={activeCategory}
       />
-      <Gallery
-        cols={cols}
-        loggedIn={loggedIn}
-        onRequireLogin={() => openLogin(true)}
-        onCopy={tryCopy}
-        category={activeCategory}
-        filters={activeFilters}
-        colorSearchActive={colorSearchActive}
-        colorSearchLoading={colorSearchLoading}
-        colorSearchResults={colorSearchResults}
-        colorSearchHasMore={colorSearchHasMore}
-        onColorSearchLoadMore={loadMoreColorSearch}
-      />
+      {/* Gallery panel — rounded top-left corner; the banner scrolls with the
+          gallery content (rendered inside Gallery). */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-tl-[22px] bg-white">
+        <Gallery
+          cols={cols}
+          loggedIn={loggedIn}
+          onRequireLogin={() => openLogin(true)}
+          onCopy={tryCopy}
+          category={activeCategory}
+          filters={activeFilters}
+          colorSearchActive={colorSearchActive}
+          colorSearchLoading={colorSearchLoading}
+          colorSearchResults={colorSearchResults}
+          colorSearchHasMore={colorSearchHasMore}
+          onColorSearchLoadMore={loadMoreColorSearch}
+        />
+      </div>
 
       <LoginModal
         open={showLogin}
@@ -392,6 +419,111 @@ function HomeInner() {
         onClose={() => setShowLimit(false)}
         limit={DAILY_LIMIT}
       />
+
+      {/* Floating bottom-right action */}
+      <button
+        type="button"
+        onClick={() => setShowSuggest(true)}
+        className="fixed bottom-6 right-8 z-50 flex cursor-pointer items-center gap-2 rounded-[10px] border-[1.5px] border-white bg-[#e6e6e6] px-3.5 py-2.5 text-[16px] tracking-[-0.03em] text-[#474747] shadow-[0px_0px_0px_1px_rgba(0,0,0,0.06),0px_1px_2px_rgba(0,0,0,0.1),0px_8px_24px_rgba(0,0,0,0.12)] ring-1 ring-black/5 transition-[background-color,color,box-shadow] hover:bg-[#f0f0f0] hover:text-[#202020] hover:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.08),0px_2px_4px_rgba(0,0,0,0.12),0px_12px_32px_rgba(0,0,0,0.16)]"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/bulb.svg" alt="" className="size-[18px] shrink-0" />
+        Suggest Improvements
+      </button>
+
+      {/* Suggest Improvements modal */}
+      {showSuggest && (
+        <div
+          onClick={() => setShowSuggest(false)}
+          className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex h-[260px] w-[440px] max-w-full flex-col gap-5 rounded-2xl bg-white p-6 shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
+          >
+            <div className="flex flex-col gap-1">
+              <div className="flex items-start justify-between">
+                <h2 className="text-[16px] font-medium tracking-[-0.03em] text-[#09090b]">
+                  Suggest Improvements
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowSuggest(false)}
+                  aria-label="Close"
+                  className="cursor-pointer text-[#71717b] transition-colors hover:text-[#09090b]"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                  </svg>
+                </button>
+              </div>
+              <p className="text-[14px] tracking-[-0.03em] text-[#71717b]">
+                Have an idea to make Blocks better? Share it with us.
+              </p>
+            </div>
+
+            <Textarea
+              value={suggestText}
+              onChange={(e) => setSuggestText(e.target.value)}
+              placeholder="Tell us what we can do better…"
+              className="flex-1"
+            />
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowSuggest(false)}
+                className="cursor-pointer rounded-[10px] border border-[#e7e9ee] px-4 py-2 text-[14px] tracking-[-0.03em] text-[#52525b] transition-colors hover:bg-[#fafafa]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitSuggestion}
+                disabled={suggestSubmitting || !suggestText.trim()}
+                className="cursor-pointer rounded-[10px] bg-[#2974ff] px-4 py-2 text-[14px] tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {suggestSubmitting ? "Submitting…" : "Submit"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Suggestion submitted — success modal */}
+      {showSuggestSuccess && (
+        <div
+          onClick={() => setShowSuggestSuccess(false)}
+          className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex h-fit w-[440px] max-w-full flex-col items-center rounded-2xl bg-white p-6 shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
+          >
+            <div className="flex size-10 items-center justify-center rounded-[10px] bg-[#e3f7ec]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/feedtick.svg" alt="" className="size-5" />
+            </div>
+            <div className="mt-4 flex flex-col items-center gap-1 text-center">
+              <h2 className="text-[16px] font-medium tracking-[-0.03em] text-[#09090b]">
+                Thanks for Helping Us Improve
+              </h2>
+              <p className="text-[14px] tracking-[-0.03em] text-[#71717b]">
+                Your suggestion has been submitted successfully. Every great
+                feature starts with feedback from users like you.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowSuggestSuccess(false)}
+              className="mt-[24px] w-full cursor-pointer rounded-[10px] bg-[#2974ff] px-4 py-2 text-[14px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6]"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
