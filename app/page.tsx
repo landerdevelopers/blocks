@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Sidebar from "./components/Sidebar";
 import Gallery from "./components/Gallery";
@@ -20,6 +20,23 @@ const DAILY_LIMIT = 10;
 
 type Hsl = { h: number; s: number; l: number };
 const HEX6 = /^#[0-9a-fA-F]{6}$/;
+
+const VALID_CATEGORIES = [
+  "website",
+  "mobile",
+  "dashboard",
+  "logos",
+  "illustrations",
+];
+
+// Resolve the initial category from the URL ?category (or default "website").
+// Pure + based on the search params (available during SSR for this client
+// component) so the server and client render the same category — no flash, no
+// hydration mismatch. Category persistence is handled by writing ?category to
+// the URL (see the effect below), so no localStorage fallback is needed here.
+function resolveCategory(urlCat: string | null): string {
+  return urlCat && VALID_CATEGORIES.includes(urlCat) ? urlCat : "website";
+}
 
 // Family-aware HSL match: does a component color `el` match the search color `s`?
 // Mode is decided from the SEARCH color, mirroring the old search_by_color RPC:
@@ -70,6 +87,9 @@ function HomeInner() {
 
   // Fresh magic-link login → open onboarding immediately, before any auth event.
   const searchParams = useSearchParams();
+  // Initial category from ?category — read from search params (SSR-available)
+  // so the server renders the right category from the start (no website flash).
+  const startCategory = resolveCategory(searchParams.get("category"));
   const [onboardingRedirect] = useState(
     () => searchParams.get("onboarding") === "true",
   );
@@ -84,7 +104,7 @@ function HomeInner() {
     if (typeof window === "undefined") return 3;
     // One shared column count everywhere. Logos allows up to 6, the rest cap
     // at 5 — clamp the stored value to the active context's max before paint.
-    const cat = localStorage.getItem("active_category") || "website";
+    const cat = startCategory;
     const max = cat === "logos" ? 6 : 5;
     const min = cat === "logos" ? 2 : 1;
     const stored = parseInt(localStorage.getItem("layout_cols") || "3", 10);
@@ -97,94 +117,133 @@ function HomeInner() {
   const [showLimit, setShowLimit] = useState(false);
   // Active sidebar selection — drives which components the gallery shows.
   // Persisted so the correct category (and its column count) is known on refresh.
-  const [activeCategory, setActiveCategory] = useState<string | null>(() => {
-    if (typeof window === "undefined") return "website";
-    return localStorage.getItem("active_category") || "website";
-  });
+  const [activeCategory, setActiveCategory] = useState<string | null>(
+    () => startCategory,
+  );
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
 
-  // Shared in-memory gallery list — color search filters this directly, so it's
-  // instant with no network round-trip.
-  const components = useAuthStore((s) => s.components);
-
-  // Color search — overrides the normal gallery list when active.
+  // Color search — overrides the normal gallery list when active. Results come
+  // from the server-side search_by_color RPC (full DB), merged across the picked
+  // colors, scored by matched pct, and paginated client-side for display.
   const [colorSearchActive, setColorSearchActive] = useState(false);
-  // Picked colors. Results are derived from these during render (see useMemo).
-  const [colorHexes, setColorHexes] = useState<string[]>([]);
+  const [colorSearchLoading, setColorSearchLoading] = useState(false);
+  const [colorSearchPage, setColorSearchPage] = useState(0);
+  // Full, scored, sorted RPC results across every category. Narrowed to the
+  // active category/section at display time so changing filters is instant.
+  const [colorSearchAll, setColorSearchAll] = useState<GalleryComponent[]>([]);
+
+  const COLOR_PAGE_SIZE = 24;
 
   const CAT_MAP: Record<string, string> = {
     website: "Website",
     mobile: "Mobile Apps",
     dashboard: "Dashboard",
     logos: "Logos",
+    illustrations: "Illustrations",
   };
 
-  // Filter the in-memory components by the active category + section filters and
-  // the picked color(s). Union over colors (match EITHER), ranked by total
-  // matched pct so components hitting both colors rank highest. Pure, no I/O.
-  const deriveColorResults = (hexes: string[]): GalleryComponent[] => {
-    const picked = hexes.slice(0, 2).filter((h) => HEX6.test(h));
-    if (!picked.length) return [];
-    const searchHsls = picked.map(hexToHsl);
+  // Apply the active category + section/theme filters to a component, mirroring
+  // the normal gallery's filtering so color results stay in the chosen context.
+  const matchesActiveFilters = (c: GalleryComponent): boolean => {
     const dbCat = CAT_MAP[activeCategory ?? "website"];
-    const matchesFilters = (c: GalleryComponent) => {
-      if (!activeFilters.length) return true;
-      if (dbCat === "Logos") {
-        return activeFilters.some((f) => (c.filters ?? []).includes(f));
-      }
-      const tags = activeFilters.filter((f) => !f.startsWith("style:"));
-      const themes = activeFilters
-        .filter((f) => f.startsWith("style:"))
-        .map((f) => f.slice("style:".length));
-      if (tags.length && !tags.includes(c.section ?? "")) return false;
-      if (themes.length && !themes.some((t) => (c.filters ?? []).includes(t)))
-        return false;
-      return true;
-    };
-
-    const scored: { c: GalleryComponent; score: number }[] = [];
-    for (const c of components) {
-      if (c.category !== dbCat || !matchesFilters(c)) continue;
-      let score = 0;
-      let hit = false;
-      for (const sh of searchHsls) {
-        const p = bestMatchPct(c.colors, sh);
-        if (p >= 0) {
-          hit = true;
-          score += p;
-        }
-      }
-      if (hit) scored.push({ c, score });
+    if (c.category !== dbCat) return false;
+    if (!activeFilters.length) return true;
+    if (dbCat === "Logos") {
+      return activeFilters.some((f) => (c.filters ?? []).includes(f));
     }
-    return scored.sort((a, b) => b.score - a.score).map((x) => x.c);
+    const tags = activeFilters.filter((f) => !f.startsWith("style:"));
+    const themes = activeFilters
+      .filter((f) => f.startsWith("style:"))
+      .map((f) => f.slice("style:".length));
+    if (tags.length && !tags.includes(c.section ?? "")) return false;
+    if (themes.length && !themes.some((t) => (c.filters ?? []).includes(t)))
+      return false;
+    return true;
   };
 
-  // Results derived during render — instant, and auto-recomputes whenever the
-  // picked colors, the active section/filters, or the in-memory components
-  // change (e.g. the background fetch populates colors). No effect, no network.
-  const colorSearchResults = useMemo(
+  // Full results narrowed to the active category/section. The RPC order
+  // (matched pct desc) is preserved by filtering in place.
+  const colorSearchFiltered = useMemo(
     () =>
-      colorSearchActive && colorHexes.length
-        ? deriveColorResults(colorHexes)
-        : null,
+      colorSearchActive ? colorSearchAll.filter(matchesActiveFilters) : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [colorSearchActive, colorHexes, components, activeCategory, activeFilters],
+    [colorSearchActive, colorSearchAll, activeCategory, activeFilters],
   );
 
-  const runColorSearch = (hexes: string[]) => {
-    setColorHexes(hexes);
+  // Displayed slice — grows by COLOR_PAGE_SIZE as the user scrolls.
+  const colorSearchResults = useMemo(
+    () =>
+      colorSearchActive
+        ? colorSearchFiltered.slice(0, (colorSearchPage + 1) * COLOR_PAGE_SIZE)
+        : null,
+    [colorSearchActive, colorSearchFiltered, colorSearchPage],
+  );
+  const colorSearchHasMore =
+    colorSearchActive &&
+    colorSearchFiltered.length > (colorSearchPage + 1) * COLOR_PAGE_SIZE;
+
+  const loadMoreColorSearch = useCallback(() => {
+    setColorSearchPage((p) => p + 1);
+  }, []);
+
+  // Run the color search: one search_by_color RPC per picked hex (max 2) in
+  // parallel, merge + dedupe by id, then score each component by summed matched
+  // pct so ones hitting both colors rank highest.
+  const runColorSearch = async (hexes: string[]) => {
+    const picked = hexes.slice(0, 2).filter((h) => HEX6.test(h));
     setColorSearchActive(true);
+    setColorSearchPage(0);
+    if (!picked.length) {
+      setColorSearchAll([]);
+      return;
+    }
+    setColorSearchLoading(true);
+    const supabase = createClient();
+    const responses = await Promise.all(
+      picked.map((hex) =>
+        supabase.rpc("search_by_color", { search_hex: hex, tolerance: 0 }),
+      ),
+    );
+    const byId = new Map<string, GalleryComponent>();
+    for (const { data, error } of responses) {
+      if (error) {
+        console.error("[color-search] search_by_color:", error.message);
+        continue;
+      }
+      for (const row of (data as GalleryComponent[]) ?? []) {
+        if (!byId.has(row.id)) byId.set(row.id, row);
+      }
+    }
+    const searchHsls = picked.map(hexToHsl);
+    const scored = [...byId.values()].map((c) => {
+      let score = 0;
+      for (const sh of searchHsls) {
+        const p = bestMatchPct(c.colors, sh);
+        if (p >= 0) score += p;
+      }
+      return { c, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    setColorSearchAll(scored.map((x) => x.c));
+    setColorSearchLoading(false);
   };
 
   const clearColorSearch = () => {
     setColorSearchActive(false);
-    setColorHexes([]);
+    setColorSearchAll([]);
+    setColorSearchPage(0);
+    setColorSearchLoading(false);
   };
 
-  // Persist the active category so it's known synchronously on next load.
+  // Persist the active category to localStorage and reflect it in the URL
+  // (?category=…) without navigation, so refresh/share opens the same category.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    localStorage.setItem("active_category", activeCategory ?? "website");
+    const cat = activeCategory ?? "website";
+    localStorage.setItem("active_category", cat);
+    const params = new URLSearchParams(window.location.search);
+    params.set("category", cat);
+    window.history.replaceState({}, "", `?${params.toString()}`);
   }, [activeCategory]);
 
   // Persist the single shared column count to localStorage.
@@ -283,6 +342,9 @@ function HomeInner() {
         onFilter={(id, filters) => {
           setActiveCategory(id);
           setActiveFilters(filters);
+          // Color results are filtered client-side by category/section — reset
+          // to the first page so the narrowed set shows from the top.
+          setColorSearchPage(0);
           // Logos aren't color-searchable — drop any active color search so the
           // logos list shows instead of stale color results.
           if (id === "logos") clearColorSearch();
@@ -306,7 +368,10 @@ function HomeInner() {
         category={activeCategory}
         filters={activeFilters}
         colorSearchActive={colorSearchActive}
+        colorSearchLoading={colorSearchLoading}
         colorSearchResults={colorSearchResults}
+        colorSearchHasMore={colorSearchHasMore}
+        onColorSearchLoadMore={loadMoreColorSearch}
       />
 
       <LoginModal

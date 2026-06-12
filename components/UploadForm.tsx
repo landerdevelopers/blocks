@@ -83,7 +83,13 @@ function hexToHsv(hex: string): [number, number, number] | null {
   return [h, max ? d / max : 0, max];
 }
 
-const CATEGORIES = ["Web", "Mobile", "Dashboard", "Logo"] as const;
+const CATEGORIES = [
+  "Web",
+  "Mobile",
+  "Dashboard",
+  "Logo",
+  "Illustration",
+] as const;
 type Category = (typeof CATEGORIES)[number];
 
 // UI category labels <-> the values stored in public.components.category.
@@ -92,12 +98,14 @@ const UI_TO_DB: Record<Category, string> = {
   Mobile: "Mobile Apps",
   Dashboard: "Dashboard",
   Logo: "Logos",
+  Illustration: "Illustrations",
 };
 const DB_TO_UI: Record<string, Category> = {
   Website: "Web",
   "Mobile Apps": "Mobile",
   Dashboard: "Dashboard",
   Logos: "Logo",
+  Illustrations: "Illustration",
 };
 
 const LETTERS = Array.from({ length: 26 }, (_, i) =>
@@ -138,6 +146,10 @@ const CONFIG: Record<Category, { sections: string[]; filters: string[] }> = {
   Logo: {
     sections: [],
     filters: [...LETTERS, "Others"],
+  },
+  Illustration: {
+    sections: ["Flat", "Isometric", "Icons"],
+    filters: [],
   },
 };
 
@@ -336,7 +348,7 @@ export default function UploadForm({
     hasImage &&
     !!figmaData &&
     (sections.length === 0 || section !== null) &&
-    filters.size > 0;
+    (filterOpts.length === 0 || filters.size > 0);
 
   const changeCategory = (c: Category) => {
     setCategory(c);
@@ -445,7 +457,6 @@ export default function UploadForm({
           section: c.section,
           filters: c.filters,
           figma_url: c.figma_url,
-          figma_data: c.figma_data,
           preview_url: c.preview_url,
           aspect_ratio: c.aspect_ratio,
           colors: c.colors,
@@ -612,22 +623,24 @@ export default function UploadForm({
       )}
 
       {/* Select Filter */}
-      <div className="mt-4 flex flex-col gap-2">
-        <FieldLabel>
-          Select {category === "Logo" ? "Letter" : "Theme"}
-          {multiFilter ? " (multi select)" : ""}
-        </FieldLabel>
-        <div className="flex flex-wrap gap-2">
-          {filterOpts.map((f) => (
-            <Chip
-              key={f}
-              label={f}
-              active={filters.has(f)}
-              onClick={() => toggleFilter(f)}
-            />
-          ))}
+      {filterOpts.length > 0 && (
+        <div className="mt-4 flex flex-col gap-2">
+          <FieldLabel>
+            Select {category === "Logo" ? "Letter" : "Theme"}
+            {multiFilter ? " (multi select)" : ""}
+          </FieldLabel>
+          <div className="flex flex-wrap gap-2">
+            {filterOpts.map((f) => (
+              <Chip
+                key={f}
+                label={f}
+                active={filters.has(f)}
+                onClick={() => toggleFilter(f)}
+              />
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Select Colors */}
       {category !== "Logo" && (

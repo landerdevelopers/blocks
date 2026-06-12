@@ -12,6 +12,7 @@ const CAT_MAP: Record<string, string> = {
   mobile: "Mobile Apps",
   dashboard: "Dashboard",
   logos: "Logos",
+  illustrations: "Illustrations",
 };
 
 type Comp = {
@@ -73,6 +74,11 @@ const sections: Section[] = [
       ...Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)),
       "Others",
     ],
+  },
+  {
+    id: "illustrations",
+    label: "Illustrations",
+    tags: [{ label: "Flat" }, { label: "Isometric" }, { label: "Icons" }],
   },
 ];
 
@@ -311,8 +317,12 @@ export default function Sidebar({
     };
   }, []);
 
-  // Accordion: at most one section open at a time.
-  const [openId, setOpenId] = useState<string | null>("website");
+  // Accordion: at most one section open at a time. Init to the active category
+  // (now SSR-correct — page derives it from ?category), so the right accordion
+  // is open from the first render with no flash. toggleOpen owns it after.
+  const [openId, setOpenId] = useState<string | null>(
+    () => activeCategory ?? "website",
+  );
   // Filters selected per section — persisted across open/close and across
   // switching accordions. Keys are prefixed "<sectionId>:" so one Set holds all.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -356,11 +366,11 @@ export default function Sidebar({
             </p>
             <div className="flex flex-col gap-0.5">
               <p className="text-base tracking-[-0.03em] text-[#71717b]">
-                A collection of designs shared on X, now
+                Blocks is a growing library of design
               </p>
               <div className="flex items-center gap-1.5">
                 <p className="text-base tracking-[-0.03em] text-[#71717b]">
-                  free for the community by
+                  resources created by
                 </p>
                 <a
                   href="https://lander.studio/"
@@ -480,13 +490,13 @@ export default function Sidebar({
           <div className="h-4 w-24 animate-pulse rounded-full bg-[#ebebef]" />
         </div>
       ) : loggedIn ? (
-        <div className="mt-2.5 flex w-full shrink-0 items-center justify-between rounded-[10px] border border-[#e7e9ee] bg-white px-3 py-2">
-          <button
-            type="button"
-            onClick={onMenuClick}
-            aria-label="Open profile"
-            className="flex cursor-pointer items-center gap-2"
-          >
+        <button
+          type="button"
+          onClick={onMenuClick}
+          aria-label="Open profile"
+          className="mt-2.5 flex w-full shrink-0 cursor-pointer items-center justify-between rounded-[10px] border border-[#e7e9ee] bg-white px-3 py-2 transition-colors hover:bg-[#fafafa]"
+        >
+          <span className="flex items-center gap-2">
             {profile?.avatar_url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -496,23 +506,18 @@ export default function Sidebar({
                 className="size-[30px] shrink-0 rounded-full object-cover"
               />
             ) : (
-              <div className="flex size-[30px] items-center justify-center rounded-full bg-[#09090b] text-sm font-medium text-white">
+              <span className="flex size-[30px] items-center justify-center rounded-full bg-[#09090b] text-sm font-medium text-white">
                 {(profile?.full_name ?? "?").charAt(0).toUpperCase()}
-              </div>
+              </span>
             )}
             <span className="text-base font-medium tracking-[-0.03em] text-[#09090b]">
               {profile?.full_name ?? "Account"}
             </span>
-          </button>
-          <button
-            type="button"
-            onClick={onMenuClick}
-            aria-label="Open profile"
-            className="cursor-pointer px-1 text-lg leading-none tracking-[-0.03em] text-[#71717b]"
-          >
+          </span>
+          <span className="px-1 text-lg leading-none tracking-[-0.03em] text-[#71717b]">
             ⋮
-          </button>
-        </div>
+          </span>
+        </button>
       ) : (
         <button
           type="button"

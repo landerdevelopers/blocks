@@ -10,7 +10,7 @@ export default function MobileGate() {
       </h1>
       <p className="max-w-sm text-base leading-6 tracking-[-0.03em] text-[#71717b]">
         This application is optimized for larger screens. Please switch to a
-        desktop or laptop.
+        desktop or laptop with a minimum screen width of 1024px.
       </p>
     </div>
   );

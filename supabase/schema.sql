@@ -22,7 +22,7 @@ create table if not exists public.profiles (
 
 create table if not exists public.components (
   id           uuid primary key default gen_random_uuid(),
-  category     text check (category in ('Website', 'Mobile Apps', 'Dashboard', 'Logos')),
+  category     text check (category in ('Website', 'Mobile Apps', 'Dashboard', 'Logos', 'Illustrations')),
   section      text,
   filters      text[],
   copy_count   int         not null default 0,

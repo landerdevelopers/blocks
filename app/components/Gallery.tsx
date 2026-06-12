@@ -1,18 +1,36 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { Pencil, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
-import { readComponentsCache } from "@/lib/componentsCache";
+import {
+  readComponentsCache,
+  writeComponentsCache,
+} from "@/lib/componentsCache";
+import { cloudflareThumb } from "@/lib/utils";
 type Component = GalleryComponent;
 
-// Cloudflare Images URLs already have the delivery variant baked in at upload
-// time, so just pass them through (no-op for non-Cloudflare URLs).
-function cloudflareUrl(url: string): string {
-  if (!url || !url.includes("imagedelivery.net")) return url;
-  return url;
+const PAGE_SIZE = 24;
+
+// Deterministic varying heights for initial-load skeletons (Pinterest/Cosmos
+// look). Deterministic — not Math.random() — so SSR and client agree (no
+// hydration mismatch). Returned value is a height ratio used directly as
+// paddingBottom (e.g. 1.2 → 120%).
+const SKELETON_HEIGHTS = [0.6, 0.75, 0.85, 1.0, 1.2, 1.4, 1.6, 1.8];
+
+function getSkeletonRatio(colIndex: number, cardIndex: number): number {
+  return SKELETON_HEIGHTS[
+    (colIndex * 3 + cardIndex * 7) % SKELETON_HEIGHTS.length
+  ];
 }
 
 // Sidebar section id -> public.components.category value.
@@ -21,6 +39,7 @@ const CAT_MAP: Record<string, string> = {
   mobile: "Mobile Apps",
   dashboard: "Dashboard",
   logos: "Logos",
+  illustrations: "Illustrations",
 };
 
 const LETTERS = Array.from({ length: 26 }, (_, i) =>
@@ -69,6 +88,8 @@ export default function Gallery({
   colorSearchActive = false,
   colorSearchLoading = false,
   colorSearchResults = null,
+  colorSearchHasMore = false,
+  onColorSearchLoadMore,
 }: {
   cols?: number;
   loggedIn: boolean;
@@ -79,6 +100,8 @@ export default function Gallery({
   colorSearchActive?: boolean;
   colorSearchLoading?: boolean;
   colorSearchResults?: Component[] | null;
+  colorSearchHasMore?: boolean;
+  onColorSearchLoadMore?: () => void;
 }) {
   const isAdmin = useAuthStore((s) => s.isAdmin);
   const authLoading = useAuthStore((s) => s.authLoading);
@@ -87,39 +110,171 @@ export default function Gallery({
   const removeComponent = useAuthStore((s) => s.removeComponent);
   const componentsLoaded = useAuthStore((s) => s.componentsLoaded);
   const setComponents = useAuthStore((s) => s.setComponents);
+  const clearComponents = useAuthStore((s) => s.clearComponents);
+  const setCurrentCategory = useAuthStore((s) => s.setCurrentCategory);
+  const categoryCounts = useAuthStore((s) => s.categoryCounts);
+  const setCategoryCounts = useAuthStore((s) => s.setCategoryCounts);
+  // Pagination state + setters (transient store fields).
+  const hasMore = useAuthStore((s) => s.hasMore);
+  const currentPage = useAuthStore((s) => s.currentPage);
+  const isFetching = useAuthStore((s) => s.isFetching);
+  const isFetchingMore = useAuthStore((s) => s.isFetchingMore);
+  const setHasMore = useAuthStore((s) => s.setHasMore);
+  const setCurrentPage = useAuthStore((s) => s.setCurrentPage);
+  const setIsFetching = useAuthStore((s) => s.setIsFetching);
+  const setIsFetchingMore = useAuthStore((s) => s.setIsFetchingMore);
+  const appendComponents = useAuthStore((s) => s.appendComponents);
 
-  // Seed from a fresh (< 5 min) localStorage cache before the store has data,
-  // so a refresh shows components instantly with no skeletons.
+  // Sentinels watched by IntersectionObservers; `scrollRef` is the scroll
+  // container used as the observer root.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const colorSentinelRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLElement>(null);
+
+  // Seed the store from this category's cache SYNCHRONOUSLY (before first paint)
+  // so a refresh shows cached cards on render 1 — no blank frame, no effect lag.
+  // Guarded by a ref so it runs once; category switches are handled by the
+  // effect below.
+  const seedCat = category ?? "website";
+  const [initialCache] = useState(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return readComponentsCache(seedCat);
+    } catch {
+      return null;
+    }
+  });
+  const cacheSeeded = useRef(false);
+  if (!cacheSeeded.current && initialCache) {
+    cacheSeeded.current = true;
+    setComponents(initialCache.data);
+    // Seed this category's total too, so render 1 can show skeleton slots for
+    // the components beyond the cached page.
+    if (initialCache.total) {
+      setCategoryCounts({ [CAT_MAP[seedCat]]: initialCache.total });
+    }
+  }
+
+  // Category used for FILTERING the on-screen list. It lags `category` by one
+  // render on a switch: the effect below updates it only AFTER the store has
+  // been reset (cleared or cache-seeded), so the filter never runs the old
+  // components against the new category (which would flash "No blocks").
+  const [displayCategory, setDisplayCategory] = useState(category);
+
+  // Fetch one page of the ACTIVE category. The query is category-scoped so each
+  // page is PAGE_SIZE cards of the category being viewed (not 24 spread across
+  // every category). Page 0 replaces the list (and writes the cache); later
+  // pages append and do not touch the cache.
+  const fetchPage = useCallback(
+    async (page: number) => {
+      setIsFetching(true);
+      setIsFetchingMore(page > 0);
+      const from = page * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+      const dbCat = category ? CAT_MAP[category] : null;
+      let query = createClient()
+        .from("components")
+        .select(
+          "id, category, section, filters, figma_url, preview_url, aspect_ratio, colors",
+        )
+        .eq("is_published", true);
+      if (dbCat) query = query.eq("category", dbCat);
+      const { data, error } = await query
+        .order("created_at", { ascending: false })
+        .range(from, to);
+      if (error) {
+        console.error("[gallery] fetchPage:", error.message);
+        setIsFetching(false);
+        setIsFetchingMore(false);
+        return;
+      }
+      const fresh = (data as Component[]) ?? [];
+      if (fresh.length < PAGE_SIZE) setHasMore(false);
+      if (page === 0) {
+        setComponents(fresh);
+        // Cache page 0 under THIS page's own category (stable closure value) —
+        // not a global — so overlapping fetches across switches never mis-key.
+        // Pass the known total so the cache can drive skeleton slots on refresh.
+        const dbCat = category ? CAT_MAP[category] : null;
+        const total = dbCat
+          ? useAuthStore.getState().categoryCounts[dbCat]
+          : undefined;
+        writeComponentsCache(category ?? "website", fresh, total);
+      } else {
+        appendComponents(fresh);
+      }
+      setCurrentPage(page);
+      setIsFetching(false);
+      setIsFetchingMore(false);
+    },
+    [
+      category,
+      setComponents,
+      appendComponents,
+      setHasMore,
+      setCurrentPage,
+      setIsFetching,
+      setIsFetchingMore,
+    ],
+  );
+
+  // On mount and whenever the category changes: reset pagination, then either
+  // seed from this category's fresh (< 5 min) cache (instant, no skeletons) or
+  // clear to skeletons, flip the filter category, and fetch page 0.
   useEffect(() => {
-    if (componentsLoaded) return;
-    const cached = readComponentsCache();
-    if (cached) setComponents(cached);
+    const cat = category ?? "website";
+    setCurrentCategory(cat);
+    setHasMore(true);
+    setCurrentPage(0);
+    const cached = readComponentsCache(cat);
+    if (cached) {
+      setComponents(cached.data); // instant display from this category's cache
+      if (cached.total) setCategoryCounts({ [CAT_MAP[cat]]: cached.total });
+    } else {
+      clearComponents(); // empty + loaded=false → skeletons, never stale data
+    }
+    // Update the filter category only AFTER the store has been reset, so the
+    // list and the filter always agree (no old-components/new-category render).
+    setDisplayCategory(category);
+    fetchPage(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [category]);
 
-  // Always background-refetch; update the store/cache only when data changed.
+  // Total published counts per category — drives the skeleton slots beyond the
+  // loaded page. Deferred ~2s after mount so these 4 count(*) queries don't
+  // compete with the critical page-0 fetch (which puts the images in the DOM).
   useEffect(() => {
     let alive = true;
-    createClient()
-      .from("components")
-      .select("id, category, section, filters, figma_url, figma_data, preview_url, aspect_ratio, colors")
-      .eq("is_published", true)
-      .order("created_at", { ascending: false })
-      .then(({ data }) => {
-        if (!alive) return;
-        const fresh = (data as Component[]) ?? [];
-        const current = useAuthStore.getState().components;
-        if (JSON.stringify(current) !== JSON.stringify(fresh)) {
-          setComponents(fresh);
-        } else if (!useAuthStore.getState().componentsLoaded) {
-          // Same data but not yet flagged loaded (no cache existed).
-          setComponents(fresh);
-        }
+    const fetchAllCounts = async () => {
+      const cats = [
+        "Website",
+        "Mobile Apps",
+        "Dashboard",
+        "Logos",
+        "Illustrations",
+      ];
+      const results = await Promise.all(
+        cats.map((cat) =>
+          createClient()
+            .from("components")
+            .select("*", { count: "exact", head: true })
+            .eq("category", cat)
+            .eq("is_published", true),
+        ),
+      );
+      if (!alive) return;
+      const counts: Record<string, number> = {};
+      cats.forEach((cat, i) => {
+        counts[cat] = results[i].count ?? 0;
       });
+      setCategoryCounts(counts);
+    };
+    const timer = setTimeout(fetchAllCounts, 2000);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
-  }, [setComponents]);
+  }, [setCategoryCounts]);
 
   // Preload the copied-state icon so the figma→tick swap doesn't flash/break.
   useEffect(() => {
@@ -127,7 +282,14 @@ export default function Gallery({
     img.src = "/Tick.png";
   }, []);
 
-  const dbCategory = category ? CAT_MAP[category] : null;
+  // The real grid depends on client-only inputs (`cols` from localStorage, the
+  // cache, the counts), so its first render can't match the server. Gate it
+  // behind `mounted` and render a deterministic skeleton until then — see the
+  // early return below.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  const dbCategory = displayCategory ? CAT_MAP[displayCategory] : null;
   const isLogos = dbCategory === "Logos";
 
   // Apply category + filter selection.
@@ -159,6 +321,17 @@ export default function Gallery({
     });
   }, [components, dbCategory, filters]);
 
+  // Skeleton modes. initial = first load / switch to an uncached category (no
+  // data yet) → varying-height skeletons. load-more = a page > 0 fetch in
+  // flight → skeletons sized from the last page. A page-0 background refresh
+  // over cached data shows neither (the cache is already on screen).
+  // Initial = nothing loaded yet for this category (cold load, or a switch to an
+  // uncached category). Covers the first render too — before the fetch effect
+  // flips isFetching — via !componentsLoaded, so skeletons show with no blank.
+  const isInitialLoad =
+    (isFetching || !componentsLoaded) && components.length === 0;
+  const showSkeletons = isInitialLoad || isFetchingMore;
+
   const cfg = BTN[Math.min(6, Math.max(1, cols))] ?? BTN[3];
 
   // Hover overlay behind the copy button. The 1-col layout shows the button at
@@ -169,13 +342,66 @@ export default function Gallery({
       : "bottom-0 bg-linear-to-t from-black/70 to-transparent"
   }`;
 
-  // `cols` derives from localStorage on the client, so the grid's column count
-  // differs from the SSR default. Render only after mount to avoid a hydration
-  // mismatch on the bucket/column structure.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  // Infinite scroll for the normal gallery — load the next page when the
+  // sentinel nears the bottom. Disabled while color search is active (color
+  // search paginates separately, over its own sentinel).
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (
+          entries[0].isIntersecting &&
+          hasMore &&
+          !isFetching &&
+          !colorSearchActive
+        ) {
+          fetchPage(currentPage + 1);
+        }
+      },
+      { root: scrollRef.current, rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [
+    hasMore,
+    currentPage,
+    isFetching,
+    colorSearchActive,
+    category,
+    filtered.length,
+    fetchPage,
+  ]);
+
+  // Infinite scroll for color search — reveal the next slice of RPC results.
+  useEffect(() => {
+    const el = colorSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (
+          entries[0].isIntersecting &&
+          colorSearchHasMore &&
+          !colorSearchLoading
+        ) {
+          onColorSearchLoadMore?.();
+        }
+      },
+      { root: scrollRef.current, rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [
+    colorSearchActive,
+    colorSearchHasMore,
+    colorSearchLoading,
+    colorSearchResults,
+    onColorSearchLoadMore,
+  ]);
 
   const [copied, setCopied] = useState<string | null>(null);
+  // Id whose figma_data is being fetched on copy → shows a spinner on its button.
+  const [copying, setCopying] = useState<string | null>(null);
   // Admin delete: id awaiting confirmation in the modal (null = closed).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -317,37 +543,52 @@ export default function Gallery({
   // Copy button — shared by both views; `dark` for the logo cards. Two stacked
   // pills anchored at the same spot: on copy the "Copy to Figma" pill slides
   // down + fades out while the "Copied!" pill rises up into its place.
-  const copyButton = (
-    id: string,
-    dark: boolean,
-    figmaUrl: string | null,
-    figmaData: string | null,
-  ) => {
+  const copyButton = (id: string, dark: boolean, figmaUrl: string | null) => {
     const isCopied = copied === id;
+    const isCopying = copying === id;
     const onClick = async (e: MouseEvent) => {
       e.stopPropagation(); // don't trigger the image lightbox
       if (authLoading) return; // wait for the session to resolve
       if (!loggedIn) return onRequireLogin();
-      if (!(await onCopy(id))) return;
+      if (copying) return; // a copy is already in flight
+      setCopying(id);
       try {
-        if (figmaData) {
-          // Real Figma clipboard payload — write via execCommand so no browser
-          // permission popup is triggered. Paste recreates the component.
-          const htmlData = figmaData;
-          const listener = (ev: ClipboardEvent) => {
-            ev.clipboardData?.setData("text/html", htmlData);
-            ev.preventDefault();
-          };
-          document.addEventListener("copy", listener);
-          document.execCommand("copy");
-          document.removeEventListener("copy", listener);
-        } else if (figmaUrl) {
-          await navigator.clipboard.writeText(figmaUrl);
+        // Limit check + the (large) figma_data fetch run in parallel to keep the
+        // gap before the clipboard write short. figma_data is fetched lazily here
+        // so it never bloats the gallery list/cache.
+        const [allowed, res] = await Promise.all([
+          onCopy(id),
+          createClient()
+            .from("components")
+            .select("figma_data")
+            .eq("id", id)
+            .single(),
+        ]);
+        if (!allowed) return; // limit reached / not allowed → no copy, no "Copied"
+        const figmaData =
+          (res.data as { figma_data: string | null } | null)?.figma_data ?? null;
+        try {
+          if (figmaData) {
+            // Real Figma clipboard payload — write via execCommand so no browser
+            // permission popup is triggered. Paste recreates the component.
+            const htmlData = figmaData;
+            const listener = (ev: ClipboardEvent) => {
+              ev.clipboardData?.setData("text/html", htmlData);
+              ev.preventDefault();
+            };
+            document.addEventListener("copy", listener);
+            document.execCommand("copy");
+            document.removeEventListener("copy", listener);
+          } else if (figmaUrl) {
+            await navigator.clipboard.writeText(figmaUrl);
+          }
+        } catch {
+          // clipboard may be blocked; still show the copied state
         }
-      } catch {
-        // clipboard may be blocked; still show the copied state
+        markCopied(id);
+      } finally {
+        setCopying(null);
       }
-      markCopied(id);
     };
 
     const pill =
@@ -390,6 +631,12 @@ export default function Gallery({
                 />
                 Loading…
               </>
+            ) : isCopying ? (
+              // Fetching figma_data for this card → spinner only.
+              <span
+                className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+                style={{ width: cfg.img, height: cfg.img }}
+              />
             ) : (
               <>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -477,7 +724,8 @@ export default function Gallery({
     );
     list.forEach((c, i) => buckets[i % buckets.length].push(c));
     return (
-      <main suppressHydrationWarning className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
+      <main ref={scrollRef} suppressHydrationWarning className="flex h-full flex-1 flex-col overflow-y-auto rounded-tl-[22px] bg-white p-4">
+        <div className="flex flex-1 items-start gap-3.5">
         {buckets.map((col, i) => (
           <div key={i} className="flex flex-1 flex-col gap-3.5">
             {col.map((c, j) => (
@@ -497,7 +745,7 @@ export default function Gallery({
                   >
                     <div
                       className={`relative w-full overflow-hidden rounded-md bg-[#e4e4e7] ${
-                        loadedIds.has(c.id) ? "" : "animate-pulse"
+                        loadedIds.has(c.id) ? "" : "skeleton-shimmer"
                       }`}
                       style={{
                         paddingBottom: c.aspect_ratio
@@ -508,36 +756,68 @@ export default function Gallery({
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         alt=""
-                        src={cloudflareUrl(c.preview_url ?? "")}
+                        src={cloudflareThumb(c.preview_url ?? "")}
                         loading={j === 0 ? "eager" : "lazy"}
-                        onLoad={() => markLoaded(c.id)}
-                        className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-500 ${
-                          loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
-                        }`}
+                        ref={(el) => {
+                          if (el && el.complete && el.naturalWidth > 0)
+                            el.style.opacity = "1";
+                        }}
+                        onLoad={(e) => {
+                          e.currentTarget.style.opacity = "1";
+                          markLoaded(c.id);
+                        }}
+                        className="absolute inset-0 h-full w-full rounded-md object-cover opacity-0 transition-opacity duration-500"
                       />
                     </div>
                     <span className={overlayCls} />
                   </div>
-                  {copyButton(c.id, false, c.figma_url, c.figma_data)}
+                  {copyButton(c.id, false, c.figma_url)}
                 </div>
               </div>
             ))}
           </div>
         ))}
+        </div>
+        <div ref={colorSentinelRef} style={{ height: 1 }} />
         {renderLightbox()}
         {renderDeleteModal()}
       </main>
     );
   };
 
-  // Before mount, render an empty (but identically-classed) main so SSR and the
-  // first client render match — the real grid depends on the client-only `cols`.
+  // Until mounted, render a deterministic skeleton — fixed columns, no
+  // client-only data (cols/cache/counts) — so the server HTML and the first
+  // client render match exactly (no hydration mismatch). The real grid renders
+  // after mount with the client `cols` and any seeded cache.
   if (!mounted) {
+    const SK_COLS = 4;
+    const ph: string[][] = Array.from({ length: SK_COLS }, () => []);
+    for (let k = 0; k < PAGE_SIZE; k++) {
+      const ci = k % SK_COLS;
+      ph[ci].push(`${getSkeletonRatio(ci, ph[ci].length) * 100}%`);
+    }
     return (
-      <main
-        suppressHydrationWarning
-        className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4"
-      />
+      <main className="flex h-full flex-1 flex-col overflow-y-auto rounded-tl-[22px] bg-white p-4">
+        <div className="flex flex-1 items-start gap-3.5">
+          {ph.map((col, i) => (
+            <div key={i} className="flex flex-1 flex-col gap-3.5">
+              {col.map((pb, k) => (
+                <div
+                  key={k}
+                  className="relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
+                >
+                  <div className="relative w-full overflow-hidden rounded-md border border-[#e7e9ee]">
+                    <div
+                      className="skeleton-shimmer relative w-full rounded-md"
+                      style={{ paddingBottom: pb }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </main>
     );
   }
 
@@ -567,7 +847,9 @@ export default function Gallery({
     return renderGrid(results);
   }
 
-  const empty = componentsLoaded && filtered.length === 0;
+  // Don't show the empty state mid-fetch (e.g. while a category switch loads) —
+  // that would flash "No blocks" before the new page's cards arrive.
+  const empty = componentsLoaded && filtered.length === 0 && !isFetching;
 
   if (empty) {
     return (
@@ -597,7 +879,7 @@ export default function Gallery({
     });
 
     return (
-      <main suppressHydrationWarning className="flex h-full flex-1 flex-col gap-6 overflow-y-auto rounded-tl-[22px] bg-white p-4">
+      <main ref={scrollRef} suppressHydrationWarning className="flex h-full flex-1 flex-col gap-6 overflow-y-auto rounded-tl-[22px] bg-white p-4">
         {groups.map(({ letter, items }) => (
           <section key={letter} className="flex flex-col gap-3.5">
             <div className="flex items-center gap-3">
@@ -621,34 +903,60 @@ export default function Gallery({
                     <div
                       className="relative flex w-full items-center justify-center overflow-hidden rounded-md border border-[#e7e9ee] bg-white"
                       style={{
-                        aspectRatio:
-                          n >= 6 ? "3 / 4" : n >= 5 ? "4 / 5" : n >= 3 ? "1 / 1" : "5 / 4",
+                        // Square for layouts 3-6; layout 2 stays slightly wide.
+                        aspectRatio: n >= 3 ? "1 / 1" : "5 / 4",
                         padding:
                           n >= 6 ? 16 : n >= 5 ? 24 : n >= 4 ? 40 : n >= 3 ? 48 : 72,
                       }}
                     >
                       {/* Placeholder fills the whole card (ignores padding). */}
                       {!loadedIds.has(c.id) && (
-                        <span className="absolute inset-0 animate-pulse bg-[#e4e4e7]" />
+                        <span className="skeleton-shimmer absolute inset-0" />
                       )}
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         alt=""
-                        src={cloudflareUrl(c.preview_url ?? "")}
+                        src={cloudflareThumb(c.preview_url ?? "")}
                         loading={idx < n ? "eager" : "lazy"}
-                        onLoad={() => markLoaded(c.id)}
-                        className={`size-full object-contain transition-opacity duration-500 ${
-                          loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
-                        }`}
+                        ref={(el) => {
+                          if (el && el.complete && el.naturalWidth > 0)
+                            el.style.opacity = "1";
+                        }}
+                        onLoad={(e) => {
+                          e.currentTarget.style.opacity = "1";
+                          markLoaded(c.id);
+                        }}
+                        className="size-full object-contain opacity-0 transition-opacity duration-500"
                       />
                     </div>
-                    {copyButton(c.id, true, c.figma_url, c.figma_data)}
+                    {copyButton(c.id, true, c.figma_url)}
                   </div>
                 </div>
               ))}
             </div>
           </section>
         ))}
+        {showSkeletons && (
+          <div
+            className="grid gap-3.5"
+            style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
+          >
+            {Array.from({ length: PAGE_SIZE }).map((_, k) => (
+              <div
+                key={`sk-${k}`}
+                className="relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
+              >
+                <div
+                  className="relative w-full overflow-hidden rounded-md border border-[#e7e9ee] bg-white"
+                  style={{ aspectRatio: n >= 3 ? "1 / 1" : "5 / 4" }}
+                >
+                  <span className="skeleton-shimmer absolute inset-0" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div ref={sentinelRef} style={{ height: 1 }} />
         {renderLightbox()}
         {renderDeleteModal()}
       </main>
@@ -661,8 +969,39 @@ export default function Gallery({
   const buckets: Component[][] = Array.from({ length: Math.max(1, cols) }, () => []);
   filtered.forEach((c, i) => buckets[i % buckets.length].push(c));
 
+  // Skeleton padding-bottom values per column, deterministic varying heights
+  // (Pinterest look), bucketed continuing the real card index so each incoming
+  // card drops into its skeleton's exact slot — no layout jump.
+  const nCols = Math.max(1, cols);
+  const skBuckets: string[][] = Array.from({ length: nCols }, () => []);
+  if (isInitialLoad) {
+    // Nothing loaded yet — one page of skeletons.
+    for (let k = 0; k < PAGE_SIZE; k++) {
+      const ci = k % nCols;
+      const cardIdx = skBuckets[ci].length;
+      skBuckets[ci].push(`${getSkeletonRatio(ci, cardIdx) * 100}%`);
+    }
+  } else {
+    // Permanent placeholders for every component beyond the loaded page (capped
+    // at 2 pages). Shown even when idle so the grid always reflects the real
+    // total; each placeholder is replaced by a card as pages stream in.
+    const cachedLen = filtered.length;
+    const totalCount = dbCategory ? categoryCounts[dbCategory] || 0 : 0;
+    let remaining = hasMore
+      ? Math.min(Math.max(0, totalCount - cachedLen), PAGE_SIZE * 2)
+      : 0;
+    // Count not known yet but a page is loading → fall back to one page.
+    if (remaining === 0 && isFetchingMore) remaining = PAGE_SIZE;
+    for (let k = 0; k < remaining; k++) {
+      const ci = (cachedLen + k) % nCols;
+      const cardIdx = skBuckets[ci].length;
+      skBuckets[ci].push(`${getSkeletonRatio(ci, cardIdx) * 100}%`);
+    }
+  }
+
   return (
-    <main suppressHydrationWarning className="flex h-full flex-1 items-start gap-3.5 overflow-y-auto rounded-tl-[22px] bg-white p-4">
+    <main ref={scrollRef} suppressHydrationWarning className="flex h-full flex-1 flex-col overflow-y-auto rounded-tl-[22px] bg-white p-4">
+      <div className="flex flex-1 items-start gap-3.5">
       {buckets.map((col, i) => (
         <div key={i} className="flex flex-1 flex-col gap-3.5">
           {col.map((c, j) => (
@@ -682,7 +1021,7 @@ export default function Gallery({
                 >
                   <div
                     className={`relative w-full overflow-hidden rounded-md bg-[#e4e4e7] ${
-                      loadedIds.has(c.id) ? "" : "animate-pulse"
+                      loadedIds.has(c.id) ? "" : "skeleton-shimmer"
                     }`}
                     style={{
                       paddingBottom: c.aspect_ratio
@@ -693,23 +1032,42 @@ export default function Gallery({
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       alt=""
-                      src={cloudflareUrl(c.preview_url ?? "")}
+                      src={cloudflareThumb(c.preview_url ?? "")}
                       loading={j === 0 ? "eager" : "lazy"}
-                      onLoad={() => markLoaded(c.id)}
-                      className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-500 ${
-                        loadedIds.has(c.id) ? "opacity-100" : "opacity-0"
-                      }`}
+                      ref={(el) => {
+                        if (el && el.complete && el.naturalWidth > 0)
+                          el.style.opacity = "1";
+                      }}
+                      onLoad={(e) => {
+                        e.currentTarget.style.opacity = "1";
+                        markLoaded(c.id);
+                      }}
+                      className="absolute inset-0 h-full w-full rounded-md object-cover opacity-0 transition-opacity duration-500"
                     />
                   </div>
                   <span className={overlayCls} />
                 </div>
-                {copyButton(c.id, false, c.figma_url, c.figma_data)}
+                {copyButton(c.id, false, c.figma_url)}
               </div>
             </div>
           ))}
+          {skBuckets[i].map((pb, k) => (
+              <div
+                key={`sk-${k}`}
+                className="relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
+              >
+                <div className="relative w-full overflow-hidden rounded-md border border-[#e7e9ee]">
+                  <div
+                    className="skeleton-shimmer relative w-full rounded-md"
+                    style={{ paddingBottom: pb }}
+                  />
+                </div>
+              </div>
+            ))}
         </div>
       ))}
-
+      </div>
+      <div ref={sentinelRef} style={{ height: 1 }} />
       {renderLightbox()}
       {renderDeleteModal()}
     </main>

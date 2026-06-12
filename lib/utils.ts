@@ -1,3 +1,13 @@
+// Swap a Cloudflare Images "/public" delivery variant for the smaller
+// "/thumbnail" variant (600px) used by gallery grid cards — ~4x smaller files.
+// No-op for non-Cloudflare URLs. Keep "/public" for the full-size lightbox.
+export function cloudflareThumb(url: string): string {
+  if (!url || !url.includes("imagedelivery.net")) return url;
+  return url
+    .replace(/\/public$/, "/thumbnail")
+    .replace(/\/public\//, "/thumbnail/");
+}
+
 // Convert a "#RRGGBB" hex string to HSL (h 0-360, s/l 0-100).
 // Used at upload time (precompute) and by client-side color search.
 export function hexToHsl(hex: string): { h: number; s: number; l: number } {
