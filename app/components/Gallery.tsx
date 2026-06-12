@@ -544,14 +544,12 @@ export default function Gallery({
     const isCopying = copying === id;
     const onClick = async (e: MouseEvent) => {
       e.stopPropagation(); // don't trigger the image lightbox
-      console.log("copy clicked", id);
       if (authLoading) return; // wait for the session to resolve
       if (!loggedIn) return onRequireLogin();
       // Synchronous, immediate lock — set before any await so no second click
       // can pass regardless of React's flush timing.
       if (copyLockRef.current) return;
       copyLockRef.current = true;
-      console.log("lock passed, fetching figma_data");
       setCopying(id);
       // Cancel any in-flight figma_data fetch before starting a new one.
       if (abortRef.current) abortRef.current.abort();
@@ -569,32 +567,40 @@ export default function Gallery({
             .abortSignal(abortRef.current.signal)
             .single(),
         ]);
-        console.log("figma_data fetched", !!res.data?.figma_data);
         if (!allowed) return; // limit reached / not allowed → no copy, no "Copied"
         const figmaData =
           (res.data as { figma_data: string | null } | null)?.figma_data ?? null;
         try {
           if (figmaData) {
-            // Real Figma clipboard payload — write via execCommand so no browser
-            // permission popup is triggered. Paste recreates the component.
-            const htmlData = figmaData;
-            const listener = (ev: ClipboardEvent) => {
-              ev.clipboardData?.setData("text/html", htmlData);
-              ev.preventDefault();
-            };
-            document.addEventListener("copy", listener);
-            console.log("writing to clipboard");
-            document.execCommand("copy");
-            document.removeEventListener("copy", listener);
-            console.log("clipboard write done");
+            // Real Figma clipboard payload. Prefer the async Clipboard API with
+            // a ClipboardItem (Safari-compatible — keeps user activation); fall
+            // back to execCommand where ClipboardItem isn't supported.
+            const htmlBlob = new Blob([figmaData], { type: "text/html" });
+            const textBlob = new Blob([figmaUrl || ""], {
+              type: "text/plain",
+            });
+            try {
+              await navigator.clipboard.write([
+                new ClipboardItem({
+                  "text/html": Promise.resolve(htmlBlob),
+                  "text/plain": Promise.resolve(textBlob),
+                }),
+              ]);
+            } catch {
+              const listener = (ev: ClipboardEvent) => {
+                ev.clipboardData?.setData("text/html", figmaData);
+                ev.clipboardData?.setData("text/plain", figmaUrl || "");
+                ev.preventDefault();
+              };
+              document.addEventListener("copy", listener);
+              document.execCommand("copy");
+              document.removeEventListener("copy", listener);
+            }
           } else if (figmaUrl) {
-            console.log("writing to clipboard");
             await navigator.clipboard.writeText(figmaUrl);
-            console.log("clipboard write done");
           }
-        } catch (err) {
+        } catch {
           // clipboard may be blocked; still show the copied state
-          console.log("copy error", err);
         }
         markCopied(id);
       } finally {
