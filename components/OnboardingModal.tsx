@@ -137,12 +137,17 @@ export default function OnboardingModal() {
         onSubmit={onSubmit}
         className="flex h-fit w-[384px] flex-col gap-5 rounded-2xl bg-white p-[30px] shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
       >
+        {/* Notice — same style as the login "Login to copy design" warning */}
+        <div className="w-fit rounded-lg border border-[#FCD8AB] bg-[#fff6eb] px-2 py-1 text-[12px] capitalize tracking-[-0.03em] text-[#E09131]">
+          Complete setup to continue
+        </div>
+
         {/* Profile photo */}
         <div className="flex flex-col gap-3.5">
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            className="group relative flex size-[88px] cursor-pointer items-center justify-center overflow-hidden rounded-full border border-[#E5E5E5] text-[#ADADAD] transition-opacity hover:opacity-70"
+            className="group relative flex size-[88px] cursor-pointer items-center justify-center overflow-hidden rounded-full text-[#ADADAD] transition-opacity hover:opacity-70"
             aria-label="Upload profile photo"
           >
             {previewSrc ? (

@@ -1,6 +1,13 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useSearchParams } from "next/navigation";
 import Sidebar from "./components/Sidebar";
 import Gallery from "./components/Gallery";
@@ -127,15 +134,38 @@ function HomeInner() {
   );
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
 
-  // Color search — overrides the normal gallery list when active. Results come
-  // from the server-side search_by_color RPC (full DB), merged across the picked
-  // colors, scored by matched pct, and paginated client-side for display.
+  // Color search — overrides the normal gallery list when active. Runs fully
+  // client-side over a prefetched pool (no per-search network round-trip).
   const [colorSearchActive, setColorSearchActive] = useState(false);
   const [colorSearchLoading, setColorSearchLoading] = useState(false);
   const [colorSearchPage, setColorSearchPage] = useState(0);
-  // Full, scored, sorted RPC results across every category. Narrowed to the
-  // active category/section at display time so changing filters is instant.
+  // Full, scored, sorted results across every category. Narrowed to the active
+  // category/section at display time so changing filters is instant.
   const [colorSearchAll, setColorSearchAll] = useState<GalleryComponent[]>([]);
+
+  // Color-search pool: ALL published components (lightweight columns, no
+  // figma_data) loaded once and held in a ref — never in the main store. Fetched
+  // in the background when the picker opens, so Search is instant.
+  const colorSearchPool = useRef<GalleryComponent[]>([]);
+  const colorSearchPoolLoaded = useRef(false);
+  const colorSearchPoolPromise = useRef<Promise<void> | null>(null);
+
+  const loadColorSearchPool = useCallback(() => {
+    if (colorSearchPoolLoaded.current) return Promise.resolve();
+    if (colorSearchPoolPromise.current) return colorSearchPoolPromise.current;
+    colorSearchPoolPromise.current = (async () => {
+      const { data } = await createClient()
+        .from("components")
+        .select(
+          "id, category, section, filters, preview_url, aspect_ratio, colors, colors_hsl",
+        )
+        .eq("is_published", true)
+        .order("created_at", { ascending: false });
+      colorSearchPool.current = (data as unknown as GalleryComponent[]) ?? [];
+      colorSearchPoolLoaded.current = true;
+    })();
+    return colorSearchPoolPromise.current;
+  }, []);
 
   const COLOR_PAGE_SIZE = 24;
 
@@ -191,9 +221,9 @@ function HomeInner() {
     setColorSearchPage((p) => p + 1);
   }, []);
 
-  // Run the color search: one search_by_color RPC per picked hex (max 2) in
-  // parallel, merge + dedupe by id, then score each component by summed matched
-  // pct so ones hitting both colors rank highest.
+  // Run the color search fully client-side over the prefetched pool: score each
+  // component by summed matched pct (union over the picked colors) so ones
+  // hitting both rank highest. No network call — instant once the pool is loaded.
   const runColorSearch = async (hexes: string[]) => {
     const picked = hexes.slice(0, 2).filter((h) => HEX6.test(h));
     setColorSearchActive(true);
@@ -203,31 +233,21 @@ function HomeInner() {
       return;
     }
     setColorSearchLoading(true);
-    const supabase = createClient();
-    const responses = await Promise.all(
-      picked.map((hex) =>
-        supabase.rpc("search_by_color", { search_hex: hex, tolerance: 0 }),
-      ),
-    );
-    const byId = new Map<string, GalleryComponent>();
-    for (const { data, error } of responses) {
-      if (error) {
-        console.error("[color-search] search_by_color:", error.message);
-        continue;
-      }
-      for (const row of (data as GalleryComponent[]) ?? []) {
-        if (!byId.has(row.id)) byId.set(row.id, row);
-      }
-    }
+    await loadColorSearchPool(); // instant if already prefetched on picker open
     const searchHsls = picked.map(hexToHsl);
-    const scored = [...byId.values()].map((c) => {
+    const scored: { c: GalleryComponent; score: number }[] = [];
+    for (const c of colorSearchPool.current) {
       let score = 0;
+      let hit = false;
       for (const sh of searchHsls) {
         const p = bestMatchPct(c.colors, sh);
-        if (p >= 0) score += p;
+        if (p >= 0) {
+          hit = true;
+          score += p;
+        }
       }
-      return { c, score };
-    });
+      if (hit) scored.push({ c, score });
+    }
     scored.sort((a, b) => b.score - a.score);
     setColorSearchAll(scored.map((x) => x.c));
     setColorSearchLoading(false);
@@ -381,6 +401,7 @@ function HomeInner() {
         minCols={activeCategory === "logos" ? 2 : 1}
         onColorSearch={runColorSearch}
         onColorClear={clearColorSearch}
+        onColorPickerOpen={loadColorSearchPool}
         activeCategory={activeCategory}
       />
       {/* Gallery panel — rounded top-left corner; the banner scrolls with the
@@ -499,25 +520,24 @@ function HomeInner() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="flex h-fit w-[440px] max-w-full flex-col items-center rounded-2xl bg-white p-6 shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
+            className="flex h-fit w-[440px] max-w-full flex-col items-center rounded-2xl bg-white p-10 shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
           >
-            <div className="flex size-10 items-center justify-center rounded-[10px] bg-[#e3f7ec]">
+            <div className="flex size-12 items-center justify-center rounded-[10px] bg-[#e3f7ec]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/feedtick.svg" alt="" className="size-5" />
+              <img src="/feedtick.svg" alt="" className="size-6" />
             </div>
             <div className="mt-4 flex flex-col items-center gap-1 text-center">
-              <h2 className="text-[16px] font-medium tracking-[-0.03em] text-[#09090b]">
+              <h2 className="text-[18px] font-medium tracking-[-0.03em] text-[#09090b]">
                 Thanks for Helping Us Improve
               </h2>
-              <p className="text-[14px] tracking-[-0.03em] text-[#71717b]">
-                Your suggestion has been submitted successfully. Every great
-                feature starts with feedback from users like you.
+              <p className="text-[16px] tracking-[-0.03em] text-[#71717b]">
+                Your suggestion has been submitted successfully. Your feedback shapes great features.
               </p>
             </div>
             <button
               type="button"
               onClick={() => setShowSuggestSuccess(false)}
-              className="mt-[24px] w-full cursor-pointer rounded-[10px] bg-[#2974ff] px-4 py-2 text-[14px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6]"
+              className="mt-[24px] w-full cursor-pointer rounded-[10px] bg-[#2974ff] px-4 py-2 text-[16px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6]"
             >
               Done
             </button>

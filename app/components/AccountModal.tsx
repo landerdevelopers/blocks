@@ -78,7 +78,7 @@ export default function AccountModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex h-fit w-[400px] flex-col gap-5 rounded-2xl bg-white p-[28px] shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
+        className="flex h-fit w-[440px] flex-col gap-5 rounded-2xl bg-white p-[28px] shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
       >
         {/* Identity — avatar is changeable, name/email are not */}
         <div className="flex items-center justify-between">
@@ -120,10 +120,10 @@ export default function AccountModal({
               onChange={onChangeAvatar}
             />
             <div className="flex flex-col">
-              <span className="text-[16px] font-semibold tracking-[-0.03em] text-[#09090b]">
+              <span className="text-[18px] font-semibold tracking-[-0.03em] text-[#09090b]">
                 {profile?.full_name ?? "Account"}
               </span>
-              <span className="text-[14px] tracking-[-0.03em] text-[#71717b]">
+              <span className="text-[16px] tracking-[-0.03em] text-[#71717b]">
                 {email ?? ""}
               </span>
             </div>
@@ -132,7 +132,7 @@ export default function AccountModal({
             type="button"
             onClick={onLogout}
             aria-label="Log out"
-            className="group relative flex size-8 cursor-pointer items-center justify-center rounded-full bg-[#FFE2E2] text-[#FF1313] transition-colors hover:bg-[#ffd0d0]"
+            className="group relative flex size-10 cursor-pointer items-center justify-center rounded-full bg-[#FFE2E2] text-[#FF1313] transition-colors hover:bg-[#ffd0d0]"
           >
             <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-[#09090b] px-2 py-1 text-[12px] font-medium tracking-[-0.03em] text-white opacity-0 transition-opacity group-hover:opacity-100">
               Logout
@@ -161,11 +161,11 @@ export default function AccountModal({
             Daily Limit
           </span>
           <div className="flex items-center gap-3">
-            <div className="flex w-fit items-center gap-[3px] rounded-[8px] border border-[#e4e4e7] bg-[#f9fafa] p-[4px]">
+            <div className="flex flex-1 items-center gap-[3px] rounded-[8px] border border-[#e4e4e7] bg-[#f9fafa] p-[4px]">
               {Array.from({ length: LIMIT }).map((_, i) => (
                 <div
                   key={i}
-                  className={`h-[18px] w-[25.5px] rounded-md ${
+                  className={`h-[18px] flex-1 rounded-md ${
                     i < used
                       ? used >= LIMIT
                         ? "bg-[#FF2C2C]"
@@ -182,16 +182,16 @@ export default function AccountModal({
         </div>
 
         {/* Notice */}
-        <div className="rounded-[6px] bg-[#fff0d6] px-[8px] py-[4px] text-[12px] text-[#CA8000]">
+        <div className="rounded-[8px] bg-[#fff0d6] px-[8px] py-[4px] text-[14px] text-[#CA8000]">
           Design copies are temporarily limited to {LIMIT} per day while the
           platform is under development.
         </div>
 
         {/* Reset timer */}
-        <div className="flex items-center gap-1 text-[12px] tracking-[-0.03em] text-[#71717b]">
+        <div className="flex items-center gap-1 text-[14px] tracking-[-0.03em] text-[#71717b]">
           <svg
-            width="16"
-            height="16"
+            width="18"
+            height="18"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"

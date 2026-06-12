@@ -276,6 +276,7 @@ export default function Sidebar({
   onFilter,
   onColorSearch,
   onColorClear,
+  onColorPickerOpen,
   activeCategory,
 }: {
   cols: number;
@@ -288,6 +289,7 @@ export default function Sidebar({
   onFilter: (sectionId: string | null, filters: string[]) => void;
   onColorSearch?: (colors: string[]) => void;
   onColorClear?: () => void;
+  onColorPickerOpen?: () => void;
   // The category the gallery is currently showing (may differ from the open
   // accordion — a closed accordion still shows the last-opened category).
   activeCategory?: string | null;
@@ -421,6 +423,7 @@ export default function Sidebar({
                     key={show ? "color-search-on" : "color-search-off"}
                     onSearch={onColorSearch}
                     onClear={onColorClear}
+                    onOpen={onColorPickerOpen}
                   />
                 </div>
               </div>

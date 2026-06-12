@@ -131,6 +131,10 @@ export default function Gallery({
   const firstSkeletonRef = useRef<HTMLDivElement>(null);
   const colorSentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
+  // Synchronous lock so a second click can't start a copy mid-flight, plus an
+  // AbortController to cancel any in-flight figma_data fetch.
+  const copyLockRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   // The store is seeded from this category's cache in the mount/category effect
   // below (not during render — that would setState mid-render and update other
@@ -542,8 +546,14 @@ export default function Gallery({
       e.stopPropagation(); // don't trigger the image lightbox
       if (authLoading) return; // wait for the session to resolve
       if (!loggedIn) return onRequireLogin();
-      if (copying) return; // a copy is already in flight
+      // Synchronous, immediate lock — set before any await so no second click
+      // can pass regardless of React's flush timing.
+      if (copyLockRef.current) return;
+      copyLockRef.current = true;
       setCopying(id);
+      // Cancel any in-flight figma_data fetch before starting a new one.
+      if (abortRef.current) abortRef.current.abort();
+      abortRef.current = new AbortController();
       try {
         // Limit check + the (large) figma_data fetch run in parallel to keep the
         // gap before the clipboard write short. figma_data is fetched lazily here
@@ -554,6 +564,7 @@ export default function Gallery({
             .from("components")
             .select("figma_data")
             .eq("id", id)
+            .abortSignal(abortRef.current.signal)
             .single(),
         ]);
         if (!allowed) return; // limit reached / not allowed → no copy, no "Copied"
@@ -579,6 +590,7 @@ export default function Gallery({
         }
         markCopied(id);
       } finally {
+        copyLockRef.current = false;
         setCopying(null);
       }
     };
@@ -669,7 +681,7 @@ export default function Gallery({
   // away with it (not pinned).
   const banner = (
     <div className="mb-3.5 shrink-0">
-      <div className="flex h-[34px] w-[667px] max-w-full items-center gap-2 rounded-[10px] border border-[#e7e9ee] bg-[#F0F1F2] px-2.5 py-2">
+      <div className="flex h-[34px] w-fit max-w-full items-center gap-2 rounded-[10px] border border-[#e7e9ee] bg-[#F0F1F2] px-2.5 py-2">
         <Megaphone
           size={16}
           strokeWidth={1.5}
@@ -677,7 +689,7 @@ export default function Gallery({
         />
         <span className="truncate text-[14px] tracking-[-0.03em] text-[#4D4D4D]">
           We&apos;re constantly adding new designs, so come back often to explore
-          fresh resources and ideas blink 😉
+          fresh resources 😉
         </span>
       </div>
     </div>
@@ -690,7 +702,7 @@ export default function Gallery({
     <div className="flex shrink-0 items-center justify-center px-4 pt-10 pb-24">
       <div className="h-0 w-[88px] border-t border-solid [border-image:linear-gradient(to_left,#E7E9EE,transparent)_1]" />
       <div className="size-2.5 shrink-0 rounded-[2px] border border-[#E7E9EE] bg-white" />
-      <span className="whitespace-nowrap px-2.5 text-[18px] tracking-[-0.03em] text-[#71717b]">
+      <span className="whitespace-nowrap capitalize px-2.5 text-[18px] tracking-[-0.03em] text-[#71717b]">
         More coming soon
       </span>
       <div className="size-2.5 shrink-0 rounded-[2px] border border-[#E7E9EE] bg-white" />
@@ -805,6 +817,8 @@ export default function Gallery({
         ))}
         </div>
         <div ref={colorSentinelRef} style={{ height: 1 }} />
+        {/* End of color-search results. */}
+        {!colorSearchHasMore && list.length > 0 && endMarker}
         {renderLightbox()}
         {renderDeleteModal()}
       </main>
@@ -851,9 +865,35 @@ export default function Gallery({
   // Color search overrides the normal list while active.
   if (colorSearchActive) {
     if (colorSearchLoading) {
+      // Skeletons while the color RPC runs — same look as the rest of the grid.
+      const n = Math.max(1, cols);
+      const ph: string[][] = Array.from({ length: n }, () => []);
+      for (let k = 0; k < PAGE_SIZE; k++) {
+        const ci = k % n;
+        ph[ci].push(`${getSkeletonRatio(ci, ph[ci].length) * 100}%`);
+      }
       return (
-        <main className="flex min-h-0 flex-1 items-center justify-center bg-white p-4">
-          <div className="size-8 animate-spin rounded-full border-2 border-[#e4e4e7] border-t-[#2974ff]" />
+        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4">
+          {banner}
+          <div className="flex flex-1 items-start gap-3.5">
+            {ph.map((col, i) => (
+              <div key={i} className="flex flex-1 flex-col gap-3.5">
+                {col.map((pb, k) => (
+                  <div
+                    key={k}
+                    className="relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
+                  >
+                    <div className="relative w-full overflow-hidden rounded-md border border-[#e7e9ee]">
+                      <div
+                        className="skeleton-shimmer relative w-full rounded-md"
+                        style={{ paddingBottom: pb }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
         </main>
       );
     }

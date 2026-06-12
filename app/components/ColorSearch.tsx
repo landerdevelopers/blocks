@@ -31,9 +31,12 @@ const clamp = (n: number) => Math.min(1, Math.max(0, n));
 export default function ColorSearch({
   onSearch,
   onClear,
+  onOpen,
 }: {
   onSearch?: (colors: string[]) => void;
   onClear?: () => void;
+  // Fired when the picker opens — lets the parent prefetch the color-search pool.
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [colors, setColors] = useState<string[]>([]);
@@ -49,6 +52,7 @@ export default function ColorSearch({
   const [shown, setShown] = useState(false);
   useEffect(() => {
     if (open) {
+      onOpen?.(); // prefetch the color-search pool while the user picks a color
       setPopMounted(true);
       // Double rAF: let the closed state (opacity 0 / scale 0.96) paint once,
       // then flip `shown` so the enter transition runs instead of snapping.
@@ -66,7 +70,7 @@ export default function ColorSearch({
       const t = setTimeout(() => setPopMounted(false), 200);
       return () => clearTimeout(t);
     }
-  }, [open, popMounted]);
+  }, [open, popMounted, onOpen]);
   const [hue, setHue] = useState(220);
   const [sat, setSat] = useState(0.6);
   const [val, setVal] = useState(0.9);
