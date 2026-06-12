@@ -26,6 +26,36 @@ import { Textarea } from "@/components/ui/textarea";
 
 const DAILY_LIMIT = 10;
 
+// Suggest-improvements quota: 3 submissions per ISO week, tracked per browser in
+// localStorage. The button hides once used up and reappears the next week.
+const SUGGEST_WEEKLY_LIMIT = 3;
+const SUGGEST_QUOTA_KEY = "suggest_quota";
+
+function currentWeekKey(): string {
+  const d = new Date();
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - day); // ISO: Thursday of this week
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(
+    ((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7,
+  );
+  return `${date.getUTCFullYear()}-W${week}`;
+}
+
+// Submissions used in the CURRENT week (0 if the stored week has rolled over).
+function readSuggestUsed(): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const raw = localStorage.getItem(SUGGEST_QUOTA_KEY);
+    if (!raw) return 0;
+    const { week, count } = JSON.parse(raw);
+    return week === currentWeekKey() ? (count ?? 0) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 type Hsl = { h: number; s: number; l: number };
 const HEX6 = /^#[0-9a-fA-F]{6}$/;
 
@@ -127,6 +157,14 @@ function HomeInner() {
   const [suggestText, setSuggestText] = useState("");
   const [suggestSubmitting, setSuggestSubmitting] = useState(false);
   const [showSuggestSuccess, setShowSuggestSuccess] = useState(false);
+  // Weekly quota for the suggest button (read from localStorage after mount to
+  // avoid a hydration mismatch on the button's visibility).
+  const [suggestUsed, setSuggestUsed] = useState(0);
+  const [suggestMounted, setSuggestMounted] = useState(false);
+  useEffect(() => {
+    setSuggestMounted(true);
+    setSuggestUsed(readSuggestUsed());
+  }, []);
   // Active sidebar selection — drives which components the gallery shows.
   // Persisted so the correct category (and its column count) is known on refresh.
   const [activeCategory, setActiveCategory] = useState<string | null>(
@@ -354,6 +392,7 @@ function HomeInner() {
   const submitSuggestion = async () => {
     const message = suggestText.trim();
     if (!message || suggestSubmitting) return;
+    if (suggestUsed >= SUGGEST_WEEKLY_LIMIT) return; // weekly quota exhausted
     setSuggestSubmitting(true);
     const { error } = await createClient()
       .from("improvements")
@@ -363,6 +402,21 @@ function HomeInner() {
       console.error("[suggest] insert:", error.message);
       return;
     }
+    // Count this submission against the weekly quota (per browser).
+    const week = currentWeekKey();
+    let next = 1;
+    try {
+      const raw = localStorage.getItem(SUGGEST_QUOTA_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      next = parsed && parsed.week === week ? (parsed.count ?? 0) + 1 : 1;
+      localStorage.setItem(
+        SUGGEST_QUOTA_KEY,
+        JSON.stringify({ week, count: next }),
+      );
+    } catch {
+      // ignore storage errors
+    }
+    setSuggestUsed(next);
     setShowSuggest(false);
     setSuggestText("");
     setShowSuggestSuccess(true);
@@ -441,16 +495,20 @@ function HomeInner() {
         limit={DAILY_LIMIT}
       />
 
-      {/* Floating bottom-right action */}
-      <button
-        type="button"
-        onClick={() => setShowSuggest(true)}
-        className="fixed bottom-6 right-8 z-50 flex cursor-pointer items-center gap-2 rounded-[10px] border-[1.5px] border-white bg-[#e6e6e6] px-3.5 py-2.5 text-[16px] tracking-[-0.03em] text-[#474747] shadow-[0px_0px_0px_1px_rgba(0,0,0,0.06),0px_1px_2px_rgba(0,0,0,0.1),0px_8px_24px_rgba(0,0,0,0.12)] ring-1 ring-black/5 transition-[background-color,color,box-shadow] hover:bg-[#f0f0f0] hover:text-[#202020] hover:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.08),0px_2px_4px_rgba(0,0,0,0.12),0px_12px_32px_rgba(0,0,0,0.16)]"
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/bulb.svg" alt="" className="size-[18px] shrink-0" />
-        Suggest Improvements
-      </button>
+      {/* Floating bottom-right action — hidden once the weekly quota is used up,
+          reappears next week. Gated on `suggestMounted` to avoid a hydration
+          mismatch (localStorage is client-only). */}
+      {suggestMounted && suggestUsed < SUGGEST_WEEKLY_LIMIT && (
+        <button
+          type="button"
+          onClick={() => setShowSuggest(true)}
+          className="fixed bottom-6 right-8 z-50 flex cursor-pointer items-center gap-2 rounded-[10px] border-[1.5px] border-white bg-[#e6e6e6] px-3.5 py-2.5 text-[16px] tracking-[-0.03em] text-[#474747] shadow-[0px_0px_0px_1px_rgba(0,0,0,0.06),0px_1px_2px_rgba(0,0,0,0.1),0px_8px_24px_rgba(0,0,0,0.12)] ring-1 ring-black/5 transition-[background-color,color,box-shadow] hover:bg-[#f0f0f0] hover:text-[#202020] hover:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.08),0px_2px_4px_rgba(0,0,0,0.12),0px_12px_32px_rgba(0,0,0,0.16)]"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/bulb.svg" alt="" className="size-[18px] shrink-0" />
+          Suggest Improvements
+        </button>
+      )}
 
       {/* Suggest Improvements modal */}
       {showSuggest && (

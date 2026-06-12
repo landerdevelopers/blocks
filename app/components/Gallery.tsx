@@ -544,12 +544,14 @@ export default function Gallery({
     const isCopying = copying === id;
     const onClick = async (e: MouseEvent) => {
       e.stopPropagation(); // don't trigger the image lightbox
+      console.log("copy clicked", id);
       if (authLoading) return; // wait for the session to resolve
       if (!loggedIn) return onRequireLogin();
       // Synchronous, immediate lock — set before any await so no second click
       // can pass regardless of React's flush timing.
       if (copyLockRef.current) return;
       copyLockRef.current = true;
+      console.log("lock passed, fetching figma_data");
       setCopying(id);
       // Cancel any in-flight figma_data fetch before starting a new one.
       if (abortRef.current) abortRef.current.abort();
@@ -567,6 +569,7 @@ export default function Gallery({
             .abortSignal(abortRef.current.signal)
             .single(),
         ]);
+        console.log("figma_data fetched", !!res.data?.figma_data);
         if (!allowed) return; // limit reached / not allowed → no copy, no "Copied"
         const figmaData =
           (res.data as { figma_data: string | null } | null)?.figma_data ?? null;
@@ -580,13 +583,18 @@ export default function Gallery({
               ev.preventDefault();
             };
             document.addEventListener("copy", listener);
+            console.log("writing to clipboard");
             document.execCommand("copy");
             document.removeEventListener("copy", listener);
+            console.log("clipboard write done");
           } else if (figmaUrl) {
+            console.log("writing to clipboard");
             await navigator.clipboard.writeText(figmaUrl);
+            console.log("clipboard write done");
           }
-        } catch {
+        } catch (err) {
           // clipboard may be blocked; still show the copied state
+          console.log("copy error", err);
         }
         markCopied(id);
       } finally {
