@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -325,7 +326,11 @@ export default function Gallery({
 
   // Infinite scroll for the normal gallery — load the next page when the
   // sentinel nears the bottom. Disabled while color search is active (color
-  // search paginates separately, over its own sentinel).
+  // search paginates separately, over its own sentinel). The sentinel sits at
+  // the top of the skeleton area (not the very bottom) and the rootMargin is a
+  // generous 600px, so the next page fetches well before the user scrolls down
+  // — by the time they reach it, the images are already loaded. `root` is the
+  // scrollable <main> (scrollRef), not the viewport.
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
@@ -340,7 +345,7 @@ export default function Gallery({
           fetchPage(currentPage + 1);
         }
       },
-      { root: scrollRef.current, rootMargin: "200px" },
+      { root: scrollRef.current, rootMargin: "600px" },
     );
     observer.observe(el);
     return () => observer.disconnect();
@@ -1070,11 +1075,14 @@ export default function Gallery({
               </div>
             </div>
           ))}
+          {/* When there are no skeletons (e.g. counts not loaded yet), keep the
+              sentinel reachable so infinite scroll still triggers. */}
+          {i === 0 && skBuckets[i].length === 0 && (
+            <div ref={sentinelRef} style={{ height: 1 }} />
+          )}
           {skBuckets[i].map((pb, k) => (
-              <div
-                key={`sk-${k}`}
-                className="relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]"
-              >
+            <Fragment key={`sk-${k}`}>
+              <div className="relative flex w-full items-end justify-center overflow-hidden rounded-xl border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]">
                 <div className="relative w-full overflow-hidden rounded-md border border-[#e7e9ee]">
                   <div
                     className="skeleton-shimmer relative w-full rounded-md"
@@ -1082,11 +1090,17 @@ export default function Gallery({
                   />
                 </div>
               </div>
-            ))}
+              {/* Trigger the next-page fetch after the FIRST row of skeletons
+                  (first skeleton of the first column), not at the very bottom —
+                  combined with the 600px rootMargin it prefetches early. */}
+              {i === 0 && k === 0 && (
+                <div ref={sentinelRef} style={{ height: 1 }} />
+              )}
+            </Fragment>
+          ))}
         </div>
       ))}
       </div>
-      <div ref={sentinelRef} style={{ height: 1 }} />
       {endReached && endMarker}
       {renderLightbox()}
       {renderDeleteModal()}
