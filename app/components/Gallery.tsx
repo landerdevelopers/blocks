@@ -139,6 +139,9 @@ export default function Gallery({
   // Synchronous in-flight lock for pagination — blocks a second page fetch
   // before React re-renders (state-based guards lag a render).
   const fetchingPageRef = useRef(false);
+  // Hidden contenteditable focused right before execCommand('copy') — Safari
+  // returns false from execCommand with no focused editable element.
+  const hiddenCopyRef = useRef<HTMLDivElement>(null);
 
   // The store is seeded from this category's cache in the mount/category effect
   // below (not during render — that would setState mid-render and update other
@@ -598,20 +601,21 @@ export default function Gallery({
         const onCopyPromise = onCopy(id);
 
         // Clipboard write via execCommand('copy') — set the Figma component
-        // HTML on the copy event, falling back to the link.
+        // HTML on the copy event, falling back to the link. Focus the hidden
+        // contenteditable first so Safari's execCommand has an editable target.
         const fd = await figmaDataPromise;
-        console.log("[copy] figma_data:", !!fd, "figmaUrl:", figmaUrl);
 
         if (fd) {
+          hiddenCopyRef.current?.focus();
           const listener = (ev: ClipboardEvent) => {
             ev.clipboardData?.setData("text/html", fd);
             ev.clipboardData?.setData("text/plain", figmaUrl || "");
             ev.preventDefault();
           };
           document.addEventListener("copy", listener);
-          const success = document.execCommand("copy");
-          console.log("[copy] execCommand result:", success);
+          document.execCommand("copy");
           document.removeEventListener("copy", listener);
+          hiddenCopyRef.current?.blur();
         } else if (figmaUrl) {
           await navigator.clipboard.writeText(figmaUrl);
         }
@@ -741,6 +745,27 @@ export default function Gallery({
       <div className="size-2.5 shrink-0 rounded-[2px] border border-[#E7E9EE] bg-white" />
       <div className="h-0 w-[88px] border-t border-solid [border-image:linear-gradient(to_right,#E7E9EE,transparent)_1]" />
     </div>
+  );
+
+  // Hidden contenteditable target for execCommand('copy') on Safari. Rendered
+  // in every copy-capable view; only one renders at a time so the single ref
+  // attaches cleanly.
+  const hiddenCopyEl = (
+    <div
+      ref={hiddenCopyRef}
+      contentEditable
+      suppressContentEditableWarning
+      style={{
+        position: "fixed",
+        opacity: 0,
+        pointerEvents: "none",
+        width: 1,
+        height: 1,
+        overflow: "hidden",
+        top: -9999,
+        left: -9999,
+      }}
+    />
   );
 
   const renderLightbox = () =>
@@ -884,6 +909,7 @@ export default function Gallery({
         <div ref={colorSentinelRef} style={{ height: 1 }} />
         {/* End of color-search results. */}
         {!colorSearchHasMore && list.length > 0 && endMarker}
+        {hiddenCopyEl}
         {renderLightbox()}
         {renderDeleteModal()}
       </main>
@@ -1093,6 +1119,7 @@ export default function Gallery({
             infinite scroll works whether idle or loading. */}
         <div ref={firstSkeletonRef} style={{ height: 1 }} />
         {endReached && endMarker}
+        {hiddenCopyEl}
         {renderLightbox()}
         {renderDeleteModal()}
       </main>
@@ -1216,6 +1243,7 @@ export default function Gallery({
       ))}
       </div>
       {endReached && endMarker}
+      {hiddenCopyEl}
       {renderLightbox()}
       {renderDeleteModal()}
     </main>
