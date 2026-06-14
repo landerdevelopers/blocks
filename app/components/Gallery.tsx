@@ -595,14 +595,14 @@ export default function Gallery({
               null,
           );
 
-        // Limit check + copy count — kicked off in parallel but NOT awaited
-        // before the clipboard write. Safari requires the write to BEGIN inside
-        // the user gesture, so we can't block on this async server call first.
-        const onCopyPromise = onCopy(id);
+        // Limit check first — over-limit → no copy, no "Copied" state.
+        const allowed = await onCopy(id);
+        if (!allowed) return;
 
-        // Clipboard write via execCommand('copy') — set the Figma component
-        // HTML on the copy event, falling back to the link. Focus the hidden
-        // contenteditable first so Safari's execCommand has an editable target.
+        // Resolve the data, THEN call execCommand synchronously with no awaits
+        // after it — Safari only honors execCommand('copy') when it's the last
+        // synchronous op after all awaits are done. Focus the hidden
+        // contenteditable so Safari has an editable target.
         const fd = await figmaDataPromise;
 
         if (fd) {
@@ -617,13 +617,8 @@ export default function Gallery({
           document.removeEventListener("copy", listener);
           hiddenCopyRef.current?.blur();
         } else if (figmaUrl) {
-          await navigator.clipboard.writeText(figmaUrl);
+          navigator.clipboard.writeText(figmaUrl);
         }
-
-        // Limit result checked AFTER the write (can't know it before without
-        // breaking the gesture). Over-limit → no "Copied" state.
-        const allowed = await onCopyPromise;
-        if (!allowed) return;
 
         markCopied(id);
       } finally {
