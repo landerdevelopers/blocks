@@ -567,23 +567,44 @@ export default function Gallery({
   const copyButton = (id: string, dark: boolean, figmaUrl: string | null) => {
     const isCopied = copied === id;
     const isCopying = copying === id;
-    const onClick = async (e: MouseEvent) => {
+    // Zero-await clipboard write — the entire op is synchronous, called from
+    // inside a .then() callback once the data is already resolved. This is what
+    // makes execCommand('copy') honored on Safari. Focus the hidden
+    // contenteditable first so Safari has an editable target.
+    const writeClipboard = (html: string) => {
+      hiddenCopyRef.current?.focus();
+      const listener = (e: ClipboardEvent) => {
+        e.clipboardData?.setData("text/html", html);
+        e.clipboardData?.setData("text/plain", figmaUrl || "");
+        e.preventDefault();
+      };
+      document.addEventListener("copy", listener);
+      document.execCommand("copy");
+      document.removeEventListener("copy", listener);
+      hiddenCopyRef.current?.blur();
+    };
+
+    // Click handler — SYNCHRONOUS. Only sync guards, then fire the Promise
+    // chain without awaiting it. The clipboard write happens inside .then(),
+    // never after an await in this function (the ui.live onSuccess pattern).
+    const onClick = (e: MouseEvent) => {
       e.stopPropagation(); // don't trigger the image lightbox
-      if (authLoading) return; // wait for the session to resolve
-      if (!loggedIn) return onRequireLogin();
-      // Synchronous, immediate lock — set before any await so no second click
-      // can pass regardless of React's flush timing.
       if (copyLockRef.current) return;
+      if (authLoading) return; // wait for the session to resolve
+      if (!loggedIn) {
+        onRequireLogin();
+        return;
+      }
       copyLockRef.current = true;
       setCopying(id);
       // Cancel any in-flight figma_data fetch before starting a new one.
       if (abortRef.current) abortRef.current.abort();
       abortRef.current = new AbortController();
-      try {
-        // figma_data fetch — started immediately so the clipboard Promise can
-        // resolve from it. Fetched lazily here so it never bloats the
-        // list/cache.
-        const figmaDataPromise = createClient()
+
+      // Limit check + figma_data fetch in parallel; resolve both, then write.
+      Promise.all([
+        onCopy(id),
+        createClient()
           .from("components")
           .select("figma_data")
           .eq("id", id)
@@ -593,38 +614,21 @@ export default function Gallery({
             ({ data }) =>
               (data as { figma_data: string | null } | null)?.figma_data ??
               null,
-          );
-
-        // Limit check first — over-limit → no copy, no "Copied" state.
-        const allowed = await onCopy(id);
-        if (!allowed) return;
-
-        // Resolve the data, THEN call execCommand synchronously with no awaits
-        // after it — Safari only honors execCommand('copy') when it's the last
-        // synchronous op after all awaits are done. Focus the hidden
-        // contenteditable so Safari has an editable target.
-        const fd = await figmaDataPromise;
-
-        if (fd) {
-          hiddenCopyRef.current?.focus();
-          const listener = (ev: ClipboardEvent) => {
-            ev.clipboardData?.setData("text/html", fd);
-            ev.clipboardData?.setData("text/plain", figmaUrl || "");
-            ev.preventDefault();
-          };
-          document.addEventListener("copy", listener);
-          document.execCommand("copy");
-          document.removeEventListener("copy", listener);
-          hiddenCopyRef.current?.blur();
-        } else if (figmaUrl) {
-          navigator.clipboard.writeText(figmaUrl);
-        }
-
-        markCopied(id);
-      } finally {
-        copyLockRef.current = false;
-        setCopying(null);
-      }
+          ),
+      ])
+        .then(([allowed, fd]) => {
+          if (!allowed) return;
+          if (fd) {
+            writeClipboard(fd);
+          } else if (figmaUrl) {
+            navigator.clipboard.writeText(figmaUrl);
+          }
+          markCopied(id);
+        })
+        .finally(() => {
+          copyLockRef.current = false;
+          setCopying(null);
+        });
     };
 
     const pill =
