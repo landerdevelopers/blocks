@@ -597,31 +597,23 @@ export default function Gallery({
         // the user gesture, so we can't block on this async server call first.
         const onCopyPromise = onCopy(id);
 
-        // Clipboard write starts synchronously within the user gesture.
-        // ClipboardItem accepts a Promise value, so user activation is kept
-        // while figma_data is still loading — Safari/Chrome/Firefox/Edge.
-        try {
-          await navigator.clipboard.write([
-            new ClipboardItem({
-              "text/html": figmaDataPromise.then(
-                (fd) => new Blob([fd || figmaUrl || ""], { type: "text/html" }),
-              ),
-              "text/plain": Promise.resolve(
-                new Blob([figmaUrl || ""], { type: "text/plain" }),
-              ),
-            }),
-          ]);
-        } catch {
-          // Fallback where ClipboardItem-with-Promise is blocked.
-          const fd = await figmaDataPromise;
+        // Clipboard write via execCommand('copy') — set the Figma component
+        // HTML on the copy event, falling back to the link.
+        const fd = await figmaDataPromise;
+        console.log("[copy] figma_data:", !!fd, "figmaUrl:", figmaUrl);
+
+        if (fd) {
           const listener = (ev: ClipboardEvent) => {
-            ev.clipboardData?.setData("text/html", fd || figmaUrl || "");
+            ev.clipboardData?.setData("text/html", fd);
             ev.clipboardData?.setData("text/plain", figmaUrl || "");
             ev.preventDefault();
           };
           document.addEventListener("copy", listener);
-          document.execCommand("copy");
+          const success = document.execCommand("copy");
+          console.log("[copy] execCommand result:", success);
           document.removeEventListener("copy", listener);
+        } else if (figmaUrl) {
+          await navigator.clipboard.writeText(figmaUrl);
         }
 
         // Limit result checked AFTER the write (can't know it before without
