@@ -8,6 +8,18 @@ export function cloudflareThumb(url: string): string {
     .replace(/\/public\//, "/thumbnail/");
 }
 
+// Swap "/public" for a high-quality flexible variant used by the lightbox —
+// full-size, near-lossless, auto format (AVIF/WebP). scale-down never upscales,
+// so smaller originals stay native. Requires Flexible Variants enabled on the
+// Cloudflare Images account. No-op for non-Cloudflare URLs.
+export function cloudflareFull(url: string): string {
+  if (!url || !url.includes("imagedelivery.net")) return url;
+  const params = "w=2560,q=95,fit=scale-down,f=auto";
+  return url
+    .replace(/\/public$/, `/${params}`)
+    .replace(/\/public\//, `/${params}/`);
+}
+
 // Convert a "#RRGGBB" hex string to HSL (h 0-360, s/l 0-100).
 // Used at upload time (precompute) and by client-side color search.
 export function hexToHsl(hex: string): { h: number; s: number; l: number } {

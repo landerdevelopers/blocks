@@ -46,6 +46,9 @@ create table if not exists public.components (
   colors_hsl   jsonb,
   uploaded_by  uuid references public.profiles (id) on delete set null,
   is_published boolean     not null default true,
+  -- featured: pins the component to the top of the gallery (sorted before
+  -- created_at). Toggled via the upload/edit form's "Show on top" switch.
+  featured     boolean     not null default false,
   created_at   timestamptz not null default now(),
   -- Dashboard and Logos have no section; only Website / Mobile Apps may set one.
   constraint components_section_check

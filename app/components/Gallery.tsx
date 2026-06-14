@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -16,7 +17,7 @@ import {
   readComponentsCache,
   writeComponentsCache,
 } from "@/lib/componentsCache";
-import { cloudflareThumb } from "@/lib/utils";
+import { cloudflareThumb, cloudflareFull } from "@/lib/utils";
 type Component = GalleryComponent;
 
 const PAGE_SIZE = 24;
@@ -135,6 +136,9 @@ export default function Gallery({
   // AbortController to cancel any in-flight figma_data fetch.
   const copyLockRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  // Synchronous in-flight lock for pagination — blocks a second page fetch
+  // before React re-renders (state-based guards lag a render).
+  const fetchingPageRef = useRef(false);
 
   // The store is seeded from this category's cache in the mount/category effect
   // below (not during render — that would setState mid-render and update other
@@ -161,17 +165,19 @@ export default function Gallery({
       let query = createClient()
         .from("components")
         .select(
-          "id, category, section, filters, figma_url, preview_url, aspect_ratio, colors",
+          "id, category, section, filters, figma_url, preview_url, aspect_ratio, colors, featured",
         )
         .eq("is_published", true);
       if (dbCat) query = query.eq("category", dbCat);
       const { data, error } = await query
+        .order("featured", { ascending: false })
         .order("created_at", { ascending: false })
         .range(from, to);
       if (error) {
         console.error("[gallery] fetchPage:", error.message);
         setIsFetching(false);
         setIsFetchingMore(false);
+        fetchingPageRef.current = false;
         return;
       }
       const fresh = (data as Component[]) ?? [];
@@ -192,7 +198,14 @@ export default function Gallery({
       setCurrentPage(page);
       setIsFetching(false);
       setIsFetchingMore(false);
+      fetchingPageRef.current = false;
+      // A full page came back → more likely exists. Chain the next page after a
+      // short delay so cards stream in progressively (24 at a time).
+      if (fresh.length === PAGE_SIZE) {
+        setTimeout(() => fetchPage(page + 1), 100);
+      }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       category,
       setComponents,
@@ -222,6 +235,9 @@ export default function Gallery({
     // Update the filter category only AFTER the store has been reset, so the
     // list and the filter always agree (no old-components/new-category render).
     setDisplayCategory(category);
+    // Always start a category at the top + clear the page lock.
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    fetchingPageRef.current = false;
     fetchPage(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
@@ -475,8 +491,14 @@ export default function Gallery({
 
   // Lightbox.
   const [lightbox, setLightbox] = useState<
-    { src: string; logo: boolean } | null
+    { src: string; logo: boolean; aspectRatio: number | null } | null
   >(null);
+  // Full-res image load state — skeleton (sized to aspect ratio) shows until
+  // it's true. Reset whenever a new image opens.
+  const [fullLoaded, setFullLoaded] = useState(false);
+  useEffect(() => {
+    if (lightbox) setFullLoaded(false);
+  }, [lightbox?.src]);
   useEffect(() => {
     if (!lightbox) return;
     const onKey = (e: KeyboardEvent) => {
@@ -555,53 +577,47 @@ export default function Gallery({
       if (abortRef.current) abortRef.current.abort();
       abortRef.current = new AbortController();
       try {
-        // Limit check + the (large) figma_data fetch run in parallel to keep the
-        // gap before the clipboard write short. figma_data is fetched lazily here
-        // so it never bloats the gallery list/cache.
-        const [allowed, res] = await Promise.all([
-          onCopy(id),
-          createClient()
-            .from("components")
-            .select("figma_data")
-            .eq("id", id)
-            .abortSignal(abortRef.current.signal)
-            .single(),
-        ]);
-        if (!allowed) return; // limit reached / not allowed → no copy, no "Copied"
-        const figmaData =
-          (res.data as { figma_data: string | null } | null)?.figma_data ?? null;
-        try {
-          if (figmaData) {
-            // Real Figma clipboard payload. Prefer the async Clipboard API with
-            // a ClipboardItem (Safari-compatible — keeps user activation); fall
-            // back to execCommand where ClipboardItem isn't supported.
-            const htmlBlob = new Blob([figmaData], { type: "text/html" });
-            const textBlob = new Blob([figmaUrl || ""], {
-              type: "text/plain",
-            });
-            try {
-              await navigator.clipboard.write([
-                new ClipboardItem({
-                  "text/html": Promise.resolve(htmlBlob),
-                  "text/plain": Promise.resolve(textBlob),
-                }),
-              ]);
-            } catch {
-              const listener = (ev: ClipboardEvent) => {
-                ev.clipboardData?.setData("text/html", figmaData);
-                ev.clipboardData?.setData("text/plain", figmaUrl || "");
-                ev.preventDefault();
-              };
-              document.addEventListener("copy", listener);
-              document.execCommand("copy");
-              document.removeEventListener("copy", listener);
-            }
-          } else if (figmaUrl) {
-            await navigator.clipboard.writeText(figmaUrl);
-          }
-        } catch {
-          // clipboard may be blocked; still show the copied state
+        // figma_data fetch — started immediately so the clipboard Promise can
+        // resolve from it. Fetched lazily here so it never bloats the
+        // list/cache.
+        const figmaDataPromise = createClient()
+          .from("components")
+          .select("figma_data")
+          .eq("id", id)
+          .abortSignal(abortRef.current.signal)
+          .single()
+          .then(
+            ({ data }) =>
+              (data as { figma_data: string | null } | null)?.figma_data ??
+              null,
+          );
+
+        // Limit check + copy count — kicked off in parallel but NOT awaited
+        // before the clipboard write. Safari requires the write to BEGIN inside
+        // the user gesture, so we can't block on this async server call first.
+        const onCopyPromise = onCopy(id);
+
+        // Clipboard write via execCommand('copy') for all browsers — set the
+        // Figma component HTML on the copy event, falling back to the link.
+        const fd = await figmaDataPromise;
+        if (fd) {
+          const listener = (ev: ClipboardEvent) => {
+            ev.clipboardData?.setData("text/html", fd);
+            ev.clipboardData?.setData("text/plain", figmaUrl || "");
+            ev.preventDefault();
+          };
+          document.addEventListener("copy", listener);
+          document.execCommand("copy");
+          document.removeEventListener("copy", listener);
+        } else if (figmaUrl) {
+          await navigator.clipboard.writeText(figmaUrl);
         }
+
+        // Limit result checked AFTER the write (can't know it before without
+        // breaking the gesture). Over-limit → no "Copied" state.
+        const allowed = await onCopyPromise;
+        if (!allowed) return;
+
         markCopied(id);
       } finally {
         copyLockRef.current = false;
@@ -751,15 +767,43 @@ export default function Gallery({
                 // per-logo sizing or blank-then-resize jump).
                 <div className="flex size-[min(90vw,520px)] items-center justify-center rounded-xl bg-white p-16 shadow-[0px_12px_40px_rgba(0,0,0,0.4)]">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img alt="" src={lightbox.src} className="size-full object-contain" />
+                  <img alt="" src={cloudflareFull(lightbox.src)} className="size-full object-contain" />
                 </div>
               ) : (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  alt=""
-                  src={lightbox.src}
-                  className="block max-h-[85vh] max-w-[90vw] rounded-xl object-contain shadow-[0px_12px_40px_rgba(0,0,0,0.4)]"
-                />
+                // Reserve exact space from the stored aspect ratio so a
+                // skeleton can fill it while the full-res image loads.
+                <div
+                  className="w-[90vw] max-w-[calc(85vh*var(--ar))] rounded-xl shadow-[0px_12px_40px_rgba(0,0,0,0.4)]"
+                  style={
+                    {
+                      "--ar": lightbox.aspectRatio ?? 1.7778,
+                      position: "relative",
+                      paddingBottom: lightbox.aspectRatio
+                        ? `${(1 / lightbox.aspectRatio) * 100}%`
+                        : "56.25%",
+                    } as CSSProperties
+                  }
+                >
+                  {!fullLoaded && (
+                    <div className="skeleton-shimmer absolute inset-0 rounded-xl" />
+                  )}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    alt=""
+                    src={cloudflareFull(lightbox.src)}
+                    onLoad={() => setFullLoaded(true)}
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "contain",
+                      opacity: fullLoaded ? 1 : 0,
+                      transition: "opacity 0.3s ease",
+                    }}
+                    className="rounded-xl"
+                  />
+                </div>
               )}
             </div>
           </div>,
@@ -791,7 +835,11 @@ export default function Gallery({
                   <div
                     onClick={() =>
                       c.preview_url &&
-                      setLightbox({ src: c.preview_url, logo: false })
+                      setLightbox({
+                        src: c.preview_url,
+                        logo: false,
+                        aspectRatio: c.aspect_ratio,
+                      })
                     }
                     className="relative w-full cursor-zoom-in overflow-hidden rounded-md border border-[#e7e9ee]"
                   >
@@ -1073,7 +1121,7 @@ export default function Gallery({
     const cachedLen = filtered.length;
     const totalCount = dbCategory ? categoryCounts[dbCategory] || 0 : 0;
     let remaining = hasMore
-      ? Math.min(Math.max(0, totalCount - cachedLen), PAGE_SIZE * 2)
+      ? Math.min(PAGE_SIZE, Math.max(0, totalCount - cachedLen))
       : 0;
     // Count not known yet but a page is loading → fall back to one page.
     if (remaining === 0 && isFetchingMore) remaining = PAGE_SIZE;
@@ -1101,7 +1149,11 @@ export default function Gallery({
                 <div
                   onClick={() =>
                     c.preview_url &&
-                    setLightbox({ src: c.preview_url, logo: false })
+                    setLightbox({
+                      src: c.preview_url,
+                      logo: false,
+                      aspectRatio: c.aspect_ratio,
+                    })
                   }
                   className="relative w-full cursor-zoom-in overflow-hidden rounded-md border border-[#e7e9ee]"
                 >

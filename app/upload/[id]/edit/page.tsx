@@ -19,7 +19,7 @@ export default function EditComponentPage({
     const load = async () => {
       const { data } = await createClient()
         .from("components")
-        .select("preview_url, aspect_ratio, figma_data, category, section, filters, colors")
+        .select("preview_url, aspect_ratio, figma_data, category, section, filters, colors, featured")
         .eq("id", id)
         .single();
 
@@ -36,6 +36,7 @@ export default function EditComponentPage({
         section: data.section,
         filters: data.filters,
         colors: data.colors,
+        featured: data.featured,
       });
     };
     load();

@@ -65,7 +65,7 @@ const sections: Section[] = [
   {
     id: "dashboard",
     label: "Dashboard",
-    styles: ["Light", "Dark", "Others"],
+    styles: ["Light", "Dark"],
   },
   {
     id: "logos",
@@ -78,7 +78,7 @@ const sections: Section[] = [
   {
     id: "illustrations",
     label: "Illustrations",
-    tags: [{ label: "Flat" }, { label: "Isometric" }, { label: "Icons" }],
+    tags: [{ label: "Flat" }, { label: "Isometric" }],
   },
 ];
 
@@ -147,6 +147,13 @@ function SectionCard({
   const catComps = comps.filter((c) => c.category === CAT_MAP[section.id]);
   const sectionCount = (label: string) =>
     catComps.filter((c) => c.section === label).length;
+
+  // Letters (logos) that actually have a component — others are hidden so the
+  // filter only offers letters with logos behind them.
+  const availableLetters = new Set(
+    catComps.flatMap((c) => c.filters ?? []),
+  );
+  const letters = section.letters?.filter((l) => availableLetters.has(l));
 
   const headerInner = (
     <>
@@ -233,9 +240,9 @@ function SectionCard({
                 })}
               </div>
             )}
-            {section.letters && (
+            {letters && letters.length > 0 && (
               <div className="flex w-full flex-wrap gap-3">
-                {section.letters.map((l) => {
+                {letters.map((l) => {
                   const key = `${section.id}:${l}`;
                   const active = selected.has(key);
                   const isLetter = l.length === 1;

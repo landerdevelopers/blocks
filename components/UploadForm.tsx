@@ -16,14 +16,26 @@ async function compressImage(
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
-      const scale = Math.min(1, maxWidth / img.width);
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       const aspectRatio =
-        canvas.width && canvas.height ? canvas.width / canvas.height : null;
+        img.width && img.height ? img.width / img.height : null;
+
+      // Image within bounds → upload original untouched (no re-encode, no
+      // quality loss).
+      if (img.width <= maxWidth) {
+        URL.revokeObjectURL(url);
+        resolve({ file, aspectRatio });
+        return;
+      }
+
+      // Oversized → downscale with high-quality interpolation, encode WebP.
+      const scale = maxWidth / img.width;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d")!;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       canvas.toBlob(
         (blob) => {
           URL.revokeObjectURL(url);
@@ -181,6 +193,7 @@ export type UploadInitialValues = {
   section?: string | null;
   filters?: string[] | null;
   colors?: { hex: string; pct: number | null }[] | null;
+  featured?: boolean | null;
 };
 
 // The saved row returned to the caller after insert/update.
@@ -272,6 +285,9 @@ export default function UploadForm({
         hex: c.hex,
         weight: c.pct ?? null,
       })),
+  );
+  const [featured, setFeatured] = useState<boolean>(
+    initialValues?.featured ?? false,
   );
   const [pickerOpen, setPickerOpen] = useState(false);
   const [figmaData, setFigmaData] = useState<string | null>(
@@ -430,6 +446,7 @@ export default function UploadForm({
         aspect_ratio,
         colors: dbColors,
         colors_hsl,
+        featured,
       };
 
       const query = componentId
@@ -460,6 +477,7 @@ export default function UploadForm({
           preview_url: c.preview_url,
           aspect_ratio: c.aspect_ratio,
           colors: c.colors,
+          featured: (c.featured as boolean) ?? false,
         } as GalleryComponent);
       }
       onSuccess?.(data as SavedComponent);
@@ -720,6 +738,33 @@ export default function UploadForm({
         </div>
       </div>
       )}
+
+      {/* Show on top */}
+      <div className="mt-6 flex items-center justify-between rounded-xl border border-[#e7e9ee] bg-white px-3 py-3">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-sm font-medium tracking-[-0.03em] text-[#09090b]">
+            Show on top
+          </span>
+          <span className="text-xs tracking-[-0.03em] text-[#71717b]">
+            Pin this component to the top of the gallery.
+          </span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={featured}
+          onClick={() => setFeatured((v) => !v)}
+          className={`relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors ${
+            featured ? "bg-[#09090b]" : "bg-[#e4e4e7]"
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow-sm transition-transform ${
+              featured ? "translate-x-5" : "translate-x-0"
+            }`}
+          />
+        </button>
+      </div>
 
       {error && (
         <p className="mt-3 text-sm tracking-[-0.03em] text-[#ef4444]">{error}</p>

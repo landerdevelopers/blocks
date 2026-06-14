@@ -36,6 +36,8 @@ export type GalleryComponent = {
   aspect_ratio: number | null;
   // Per-color {hex, pct} array — powers client-side color search.
   colors: { hex: string; pct: number | null }[] | null;
+  // Pins the component to the top of the gallery (sorted before created_at).
+  featured: boolean;
 };
 
 type AuthState = {
