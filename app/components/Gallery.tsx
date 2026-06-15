@@ -96,7 +96,9 @@ export default function Gallery({
   cols?: number;
   loggedIn: boolean;
   onRequireLogin: () => void;
-  onCopy: (componentId: string) => boolean | Promise<boolean>;
+  onCopy: (
+    componentId: string,
+  ) => Promise<{ allowed: boolean; figmaData: string | null }>;
   category?: string | null;
   filters?: string[];
   colorSearchActive?: boolean;
@@ -133,10 +135,8 @@ export default function Gallery({
   const firstSkeletonRef = useRef<HTMLDivElement>(null);
   const colorSentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
-  // Synchronous lock so a second click can't start a copy mid-flight, plus an
-  // AbortController to cancel any in-flight figma_data fetch.
+  // Synchronous lock so a second click can't start a copy mid-flight.
   const copyLockRef = useRef(false);
-  const abortRef = useRef<AbortController | null>(null);
   // Synchronous in-flight lock for pagination — blocks a second page fetch
   // before React re-renders (state-based guards lag a render).
   const fetchingPageRef = useRef(false);
@@ -641,28 +641,13 @@ export default function Gallery({
       }
       copyLockRef.current = true;
       setCopying(id);
-      // Cancel any in-flight figma_data fetch before starting a new one.
-      if (abortRef.current) abortRef.current.abort();
-      abortRef.current = new AbortController();
 
-      // Limit check + figma_data fetch in parallel. Rejecting this promise
-      // (limit hit) aborts the clipboard write so nothing is copied.
-      const resolved = Promise.all([
-        onCopy(id),
-        createClient()
-          .from("components")
-          .select("figma_data")
-          .eq("id", id)
-          .abortSignal(abortRef.current.signal)
-          .single()
-          .then(
-            ({ data }) =>
-              (data as { figma_data: string | null } | null)?.figma_data ??
-              null,
-          ),
-      ]).then(([allowed, fd]) => {
-        if (!allowed) throw new Error("copy-limit-reached");
-        return fd;
+      // record_copy enforces the daily limit AND returns figma_data only when
+      // allowed — the single gated path to it. Rejecting this promise (limit
+      // hit / blocked) aborts the clipboard write so nothing is copied.
+      const resolved = onCopy(id).then((res) => {
+        if (!res.allowed) throw new Error("copy-not-allowed");
+        return res.figmaData;
       });
 
       // Issued synchronously — the Blob promises resolve after the fetch.

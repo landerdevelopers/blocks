@@ -17,11 +17,17 @@ export default function EditComponentPage({
 
   useEffect(() => {
     const load = async () => {
-      const { data } = await createClient()
-        .from("components")
-        .select("preview_url, aspect_ratio, figma_data, category, section, filters, colors, featured")
-        .eq("id", id)
-        .single();
+      const supabase = createClient();
+      // figma_data isn't directly selectable (column grant excludes it); read it
+      // through the admin-only RPC instead.
+      const [{ data }, { data: figmaData }] = await Promise.all([
+        supabase
+          .from("components")
+          .select("preview_url, aspect_ratio, category, section, filters, colors, featured")
+          .eq("id", id)
+          .single(),
+        supabase.rpc("get_component_figma_data", { component_id: id }),
+      ]);
 
       if (!data) {
         setNotFound(true);
@@ -31,7 +37,7 @@ export default function EditComponentPage({
       setInitial({
         previewUrl: data.preview_url,
         aspectRatio: data.aspect_ratio,
-        figmaData: data.figma_data,
+        figmaData: figmaData ?? null,
         category: data.category,
         section: data.section,
         filters: data.filters,

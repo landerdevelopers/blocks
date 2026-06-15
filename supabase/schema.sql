@@ -74,10 +74,11 @@ create table if not exists public.copy_events (
 -- One row per successful login, written from the client on the SIGNED_IN auth
 -- event. `date` is the login day (set client-side). Powers the analytics page.
 create table if not exists public.login_events (
-  id         uuid primary key default gen_random_uuid(),
-  user_id    uuid references public.profiles (id) on delete cascade,
-  date       date        not null default current_date,
-  created_at timestamptz not null default now()
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid references public.profiles (id) on delete cascade,
+  date         date        not null default current_date,
+  -- Instant of the login — drives the analytics "Recent login" sort.
+  logged_in_at timestamptz not null default now()
 );
 
 -- One row per click on the "Lander Studio" link in the sidebar description.
@@ -192,8 +193,17 @@ grant usage on schema public to anon, authenticated;
 grant select, insert, update on public.profiles to authenticated;
 
 -- components: everyone may read (published-only via RLS); writes are admin-only
--- (gated by the policies below).
-grant select on public.components to anon, authenticated;
+-- (gated by the policies below). figma_data is DELIBERATELY excluded from the
+-- column grant — it's the paid payload, so it must NOT be directly selectable.
+-- It is served only through record_copy() (rate-limited) for end users and
+-- get_component_figma_data() (admin-only) for the editor. Without this, anyone
+-- could `select figma_data` from devtools and bypass the daily copy limit.
+revoke select on public.components from anon, authenticated;
+grant select (
+  id, category, section, filters, copy_count, figma_url, preview_url,
+  aspect_ratio, colors, colors_hsl, uploaded_by, is_published, featured,
+  featured_at, created_at
+) on public.components to anon, authenticated;
 grant insert, update, delete on public.components to authenticated;
 
 -- copy_events: a logged-in user inserts/reads their own copy log.
@@ -551,7 +561,10 @@ $$;
 -- RPC: record_copy(component_id uuid)
 -- Server-side daily copy limit (10/day, IST). SECURITY DEFINER so it can bump
 -- copies_today / last_copy_date even though the profiles RLS policy forbids the
--- user from updating those columns directly. Logs a copy_events row.
+-- user from updating those columns directly. Logs a copy_events row and — only
+-- when the copy is allowed — RETURNS the component's figma_data. This is the
+-- ONLY end-user path to figma_data (the column grant excludes it), so the daily
+-- limit can't be bypassed by selecting figma_data directly.
 -- -----------------------------------------------------------------------------
 
 create or replace function public.record_copy(component_id uuid)
@@ -564,29 +577,79 @@ declare
   uid uuid := auth.uid();
   prof profiles%rowtype;
   today_ist date := (now() at time zone 'Asia/Kolkata')::date;
+  fdata text;
+  is_admin boolean;
 begin
   if uid is null then
     return json_build_object('success', false, 'reason', 'unauthenticated');
   end if;
 
   select * into prof from profiles where id = uid;
+  is_admin := (prof.role = 'admin');
 
-  if prof.last_copy_date = today_ist then
-    if prof.copies_today >= 10 then
-      return json_build_object('success', false, 'reason', 'limit_reached');
+  -- Admins have no daily limit (and their counter isn't touched).
+  if not is_admin then
+    if prof.last_copy_date = today_ist then
+      if prof.copies_today >= 10 then
+        return json_build_object('success', false, 'reason', 'limit_reached');
+      end if;
+    else
+      update profiles set copies_today = 0, last_copy_date = today_ist where id = uid;
+      prof.copies_today := 0;
     end if;
-  else
-    update profiles set copies_today = 0, last_copy_date = today_ist where id = uid;
-    prof.copies_today := 0;
   end if;
 
-  update profiles
-  set copies_today = copies_today + 1, last_copy_date = today_ist
-  where id = uid;
+  -- Only published components are copyable.
+  select c.figma_data into fdata
+  from components c
+  where c.id = component_id and c.is_published = true;
+  if not found then
+    return json_build_object('success', false, 'reason', 'not_found');
+  end if;
+
+  if not is_admin then
+    update profiles
+    set copies_today = copies_today + 1, last_copy_date = today_ist
+    where id = uid;
+  end if;
 
   insert into copy_events (user_id, component_id, date)
   values (uid, component_id, today_ist);
 
-  return json_build_object('success', true, 'copies_today', prof.copies_today + 1);
+  return json_build_object(
+    'success', true,
+    'copies_today', case when is_admin then prof.copies_today else prof.copies_today + 1 end,
+    'figma_data', fdata
+  );
 end;
 $$;
+
+-- -----------------------------------------------------------------------------
+-- RPC: get_component_figma_data(component_id uuid)
+-- Admin-only read of figma_data for the edit screen (the column grant hides it
+-- from normal selects). Returns null for non-admins.
+-- -----------------------------------------------------------------------------
+
+create or replace function public.get_component_figma_data(component_id uuid)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  fdata text;
+begin
+  if not exists (
+    select 1 from profiles where id = auth.uid() and role = 'admin'
+  ) then
+    return null;
+  end if;
+  select figma_data into fdata from components where id = component_id;
+  return fdata;
+end;
+$$;
+
+-- search_by_color used to return whole component rows (incl. figma_data) to
+-- anon callers — a figma_data leak. Color search is now fully client-side, so
+-- the RPC is dropped entirely.
+drop function if exists public.search_by_color(text, int);

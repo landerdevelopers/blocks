@@ -394,19 +394,23 @@ function HomeInner() {
   };
 
   // One copy: counted + limit-enforced server-side via the record_copy RPC
-  // (security definer). Returns whether the copy is allowed.
-  const tryCopy = async (componentId: string) => {
+  // (security definer). It also RETURNS figma_data when the copy is allowed —
+  // the only end-user path to it, since the column isn't directly selectable.
+  // So the limit can't be bypassed by fetching figma_data from devtools.
+  const tryCopy = async (
+    componentId: string,
+  ): Promise<{ allowed: boolean; figmaData: string | null }> => {
     const supabase = createClient();
     const { data, error } = await supabase.rpc("record_copy", {
       component_id: componentId,
     });
     if (error || !data) {
       console.error("[copy] record_copy:", error?.message);
-      return false;
+      return { allowed: false, figmaData: null };
     }
     if (!data.success) {
       if (data.reason === "limit_reached") setShowLimit(true);
-      return false;
+      return { allowed: false, figmaData: null };
     }
     setUsed(data.copies_today);
     if (profile) {
@@ -416,7 +420,7 @@ function HomeInner() {
         last_copy_date: todayIST(),
       });
     }
-    return true;
+    return { allowed: true, figmaData: data.figma_data ?? null };
   };
 
   const logout = async () => {
