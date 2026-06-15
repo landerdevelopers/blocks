@@ -75,6 +75,14 @@ create table if not exists public.login_events (
   created_at timestamptz not null default now()
 );
 
+-- One row per click on the "Lander Studio" link in the sidebar description.
+-- Written server-side via the service-role client (works for anon visitors);
+-- analytics counts the rows. No anon/auth grants — service role bypasses RLS.
+create table if not exists public.lander_clicks (
+  id         uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now()
+);
+
 -- Improvement suggestions submitted from the "Suggest Improvements" modal.
 -- user_id is null for logged-out submitters.
 create table if not exists public.improvements (
@@ -198,6 +206,7 @@ alter table public.profiles     enable row level security;
 alter table public.components   enable row level security;
 alter table public.copy_events  enable row level security;
 alter table public.login_events enable row level security;
+alter table public.lander_clicks enable row level security;
 alter table public.improvements enable row level security;
 
 -- profiles: users may read, insert, and update only their own row.

@@ -94,6 +94,11 @@ export default async function AnalyticsPage({
     .sort((a, b) => (b.copy_count as number) - (a.copy_count as number))
     .slice(0, 10);
 
+  // --- Lander Studio link clicks (all-time, sidebar attribution). -----------
+  const { count: landerClicks } = await admin
+    .from("lander_clicks")
+    .select("*", { count: "exact", head: true });
+
   // --- Copies in range (one fetch → total, unique users, per-category). -----
   let copyQuery = admin.from("copy_events").select("user_id, component_id");
   if (eqDate) copyQuery = copyQuery.eq("date", eqDate);
@@ -188,6 +193,21 @@ export default async function AnalyticsPage({
             <p className="text-sm tracking-[-0.03em] text-[#71717b]">
               {rangeLabel} · all times in IST
             </p>
+          </div>
+
+          {/* Lander Studio link clicks — all-time, independent of the range. */}
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-[#09090b] bg-[#09090b] p-5 text-white">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm font-medium tracking-[-0.03em]">
+                Lander Studio visits
+              </span>
+              <span className="text-xs tracking-[-0.03em] text-white/60">
+                Clicks on the sidebar link · All time
+              </span>
+            </div>
+            <span className="text-[40px] font-semibold leading-none tracking-[-0.04em]">
+              {(landerClicks ?? 0).toLocaleString()}
+            </span>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">

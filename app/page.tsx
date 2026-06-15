@@ -145,7 +145,7 @@ function HomeInner() {
     const cat = startCategory;
     const max = cat === "logos" ? 6 : 5;
     const min = cat === "logos" ? 2 : 1;
-    const stored = parseInt(localStorage.getItem("layout_cols") || "3", 10);
+    const stored = parseInt(localStorage.getItem("layout_cols") || "4", 10);
     return Math.min(max, Math.max(min, stored));
   });
   const [showLogin, setShowLogin] = useState(false);

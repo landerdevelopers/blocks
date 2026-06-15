@@ -6,6 +6,20 @@ import ColorSearch from "./ColorSearch";
 import { useAuthStore } from "@/store/authStore";
 import { createClient } from "@/lib/supabase/client";
 
+// Record a click on the "Lander Studio" link. Fire-and-forget — sendBeacon
+// survives the new-tab navigation; fetch+keepalive is the fallback.
+function trackLanderClick() {
+  try {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon("/api/track-lander-click");
+    } else {
+      fetch("/api/track-lander-click", { method: "POST", keepalive: true });
+    }
+  } catch {
+    // never block the visitor
+  }
+}
+
 // Sidebar section id -> public.components.category value.
 const CAT_MAP: Record<string, string> = {
   website: "Website",
@@ -385,6 +399,7 @@ export default function Sidebar({
                   href="https://lander.studio/"
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={trackLanderClick}
                   className="group flex items-center gap-1.5"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
