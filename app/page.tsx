@@ -495,10 +495,11 @@ function HomeInner() {
         limit={DAILY_LIMIT}
       />
 
-      {/* Floating bottom-right action — hidden once the weekly quota is used up,
-          reappears next week. Gated on `suggestMounted` to avoid a hydration
-          mismatch (localStorage is client-only). */}
-      {suggestMounted && suggestUsed < SUGGEST_WEEKLY_LIMIT && (
+      {/* Floating bottom-right action — logged-in only. Hidden once the weekly
+          quota (3/week) is used up, reappears next week. Gated on
+          `suggestMounted` to avoid a hydration mismatch (localStorage is
+          client-only). */}
+      {loggedIn && suggestMounted && suggestUsed < SUGGEST_WEEKLY_LIMIT && (
         <button
           type="button"
           onClick={() => setShowSuggest(true)}
