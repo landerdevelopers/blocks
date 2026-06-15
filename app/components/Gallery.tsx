@@ -494,14 +494,15 @@ export default function Gallery({
   const markLoaded = (id: string) =>
     setLoadedIds((prev) => new Set(prev).add(id));
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Show the "Copied!" pill for a fixed window after a copy, independent of
+  // hover, so the user always sees confirmation even if they move off the card.
   const markCopied = (key: string) => {
     if (timer.current) clearTimeout(timer.current);
     setCopied(key);
+    timer.current = setTimeout(() => setCopied(null), 2500);
   };
-  const resetAfterLeave = () => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(null), 320);
-  };
+  // Hover-leave no longer dismisses the copied state — the timer above owns it.
+  const resetAfterLeave = () => {};
 
   // Lightbox.
   const [lightbox, setLightbox] = useState<
@@ -690,16 +691,29 @@ export default function Gallery({
     const pill =
       "flex items-center justify-center whitespace-nowrap border font-medium tracking-[-0.03em] shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,transform] duration-300 ease-out";
 
+    // While copying or showing the copied state, the pill stays visible even
+    // when the card isn't hovered (so the loader/confirmation never vanishes).
+    const shown = isCopying || isCopied;
     return (
-      // Wrapper: positioned per layout + slides in on card hover.
+      // Wrapper: positioned per layout + slides in on card hover (or when shown).
       <div
-        className={`pointer-events-none absolute z-10 opacity-0 transition-[opacity,translate] duration-300 ease-out group-hover:opacity-100 ${
+        className={`pointer-events-none absolute z-10 transition-[opacity,translate] duration-300 ease-out ${
+          shown ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+        } ${
           cfg.pos === "tr"
-            ? "right-6 top-6 -translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
+            ? `right-6 top-6 ${
+                shown
+                  ? "translate-y-0"
+                  : "-translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
+              }`
             : `${
                 // Logos (dark) at layout 4/5/6 sit a little lower in the card.
                 dark && cols >= 4 ? "bottom-3" : "bottom-6"
-              } left-1/2 -translate-x-1/2 translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0`
+              } left-1/2 -translate-x-1/2 ${
+                shown
+                  ? "translate-y-0"
+                  : "translate-y-[calc(100%+1.5rem)] group-hover:translate-y-0"
+              }`
         }`}
       >
         <div className="relative">
