@@ -298,22 +298,15 @@ function HomeInner() {
     setColorSearchLoading(false);
   };
 
-  // Persist the active category to localStorage only — it's no longer reflected
-  // in the URL. Strip any legacy ?category param so old links land clean.
+  // Persist the active category to localStorage and reflect it in the URL
+  // (?category=…) without navigation, so refresh/share opens the same category.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const cat = activeCategory ?? "website";
     localStorage.setItem("active_category", cat);
     const params = new URLSearchParams(window.location.search);
-    if (params.has("category")) {
-      params.delete("category");
-      const qs = params.toString();
-      window.history.replaceState(
-        {},
-        "",
-        qs ? `?${qs}` : window.location.pathname,
-      );
-    }
+    params.set("category", cat);
+    window.history.replaceState({}, "", `?${params.toString()}`);
   }, [activeCategory]);
 
   // Persist the single shared column count to localStorage.

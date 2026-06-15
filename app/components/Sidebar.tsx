@@ -154,9 +154,6 @@ function SectionCard({
   onSelect: (key: string, sectionId: string) => void;
   comps: Comp[];
 }) {
-  // Only Website is live for now — every other category is disabled and shows
-  // "Coming soon" instead of a count, with a not-allowed cursor on hover.
-  const disabled = section.id !== "website";
   const hasContent = !!(section.tags || section.styles || section.letters);
   const select = (key: string) => onSelect(key, section.id);
 
@@ -191,20 +188,6 @@ function SectionCard({
       />
     </>
   );
-
-  // Disabled category — non-interactive row, "Coming soon", not-allowed cursor.
-  if (disabled) {
-    return (
-      <div className="flex w-full cursor-not-allowed select-none items-center justify-between rounded-[10px] border border-[#e7e9ee] bg-white px-3 py-3 opacity-60">
-        <span className="text-base font-medium leading-none tracking-[-0.03em] text-[#09090b]">
-          {section.label}
-        </span>
-        <span className="text-[13px] leading-none tracking-[-0.03em] text-[#71717b]">
-          Coming soon
-        </span>
-      </div>
-    );
-  }
 
   // Simple row (no expandable content) — button spans full padded area.
   if (!hasContent) {
