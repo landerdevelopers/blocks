@@ -121,6 +121,7 @@ function HomeInner() {
   const setProfile = useAuthStore((s) => s.setProfile);
   const authLoading = useAuthStore((s) => s.authLoading);
   const setShowOnboarding = useAuthStore((s) => s.setShowOnboarding);
+  const isAdmin = useAuthStore((s) => s.isAdmin);
   const loggedIn = !!profile;
 
   // Fresh magic-link login → open onboarding immediately, before any auth event.
@@ -298,16 +299,27 @@ function HomeInner() {
     setColorSearchLoading(false);
   };
 
-  // Persist the active category to localStorage and reflect it in the URL
-  // (?category=…) without navigation, so refresh/share opens the same category.
+  // Persist the active category to localStorage. Admins also reflect it in the
+  // URL (?category=…) for refresh/share; normal users get no category in the URL
+  // (any legacy ?category is stripped).
   useEffect(() => {
     if (typeof window === "undefined") return;
     const cat = activeCategory ?? "website";
     localStorage.setItem("active_category", cat);
     const params = new URLSearchParams(window.location.search);
-    params.set("category", cat);
-    window.history.replaceState({}, "", `?${params.toString()}`);
-  }, [activeCategory]);
+    if (isAdmin) {
+      params.set("category", cat);
+      window.history.replaceState({}, "", `?${params.toString()}`);
+    } else if (params.has("category")) {
+      params.delete("category");
+      const qs = params.toString();
+      window.history.replaceState(
+        {},
+        "",
+        qs ? `?${qs}` : window.location.pathname,
+      );
+    }
+  }, [activeCategory, isAdmin]);
 
   // Persist the single shared column count to localStorage.
   useEffect(() => {

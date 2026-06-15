@@ -795,7 +795,7 @@ export default function Gallery({
       <div className="h-0 w-[88px] border-t border-solid [border-image:linear-gradient(to_left,#E7E9EE,transparent)_1]" />
       <div className="size-2.5 shrink-0 rounded-[2px] border border-[#E7E9EE] bg-white" />
       <span className="whitespace-nowrap capitalize px-2.5 text-[18px] tracking-[-0.03em] text-[#71717b]">
-        More coming soon
+        More Designs coming soon
       </span>
       <div className="size-2.5 shrink-0 rounded-[2px] border border-[#E7E9EE] bg-white" />
       <div className="h-0 w-[88px] border-t border-solid [border-image:linear-gradient(to_right,#E7E9EE,transparent)_1]" />
