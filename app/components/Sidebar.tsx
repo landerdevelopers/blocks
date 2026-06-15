@@ -155,9 +155,10 @@ function SectionCard({
   comps: Comp[];
 }) {
   const isAdmin = useAuthStore((s) => s.isAdmin);
-  // Non-admins only get Website; every other category is "Coming soon" and
-  // disabled. Admins see and use everything as normal.
-  const disabled = !isAdmin && section.id !== "website";
+  const beta = useAuthStore((s) => !!s.profile?.beta);
+  // Only Website is open to the public; every other category is "Coming soon"
+  // and disabled. Admins and beta users see and use everything as normal.
+  const disabled = !isAdmin && !beta && section.id !== "website";
   const hasContent = !!(section.tags || section.styles || section.letters);
   const select = (key: string) => onSelect(key, section.id);
 

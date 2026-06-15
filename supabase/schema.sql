@@ -17,8 +17,13 @@ create table if not exists public.profiles (
   role         text        not null default 'user',
   copies_today int         not null default 0,
   last_copy_date date,
+  -- beta: unlocks all categories. Self-claimed by visiting the beta link while
+  -- logged in (the "Profiles: update own" policy permits the user to set it).
+  beta         boolean     not null default false,
   created_at   timestamptz not null default now()
 );
+-- Backfill for databases created before the beta column existed.
+alter table public.profiles add column if not exists beta boolean not null default false;
 
 create table if not exists public.components (
   id           uuid primary key default gen_random_uuid(),
