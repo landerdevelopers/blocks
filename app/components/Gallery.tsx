@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -234,12 +235,19 @@ export default function Gallery({
     // Update the filter category only AFTER the store has been reset, so the
     // list and the filter always agree (no old-components/new-category render).
     setDisplayCategory(category);
-    // Always start a category at the top + clear the page lock.
-    if (scrollRef.current) scrollRef.current.scrollTop = 0;
     fetchingPageRef.current = false;
     fetchPage(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
+
+  // Reset scroll to the top on every category switch. Runs in a LAYOUT effect
+  // keyed on the rendered category so it fires AFTER the new content commits —
+  // setting scrollTop in the fetch effect above hits the OLD (still-tall)
+  // content, which Mac browsers then re-anchor back to mid-scroll. Doing it
+  // here, post-commit, lands at the top on every platform.
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [displayCategory]);
 
   // Total published counts per category — drives the skeleton slots beyond the
   // loaded page. Deferred ~2s after mount so these 4 count(*) queries don't
@@ -822,7 +830,7 @@ export default function Gallery({
     );
     list.forEach((c, i) => buckets[i % buckets.length].push(c));
     return (
-      <main ref={scrollRef} suppressHydrationWarning className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4">
+      <main ref={scrollRef} suppressHydrationWarning className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4 [overflow-anchor:none]">
         {banner}
         <div className="flex flex-1 items-start gap-3.5">
         {buckets.map((col, i) => (
@@ -902,7 +910,7 @@ export default function Gallery({
       ph[ci].push(`${getSkeletonRatio(ci, ph[ci].length) * 100}%`);
     }
     return (
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4">
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4 [overflow-anchor:none]">
         {banner}
         <div className="flex flex-1 items-start gap-3.5">
           {ph.map((col, i) => (
@@ -938,7 +946,7 @@ export default function Gallery({
         ph[ci].push(`${getSkeletonRatio(ci, ph[ci].length) * 100}%`);
       }
       return (
-        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4">
+        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4 [overflow-anchor:none]">
           {banner}
           <div className="flex flex-1 items-start gap-3.5">
             {ph.map((col, i) => (
@@ -1011,7 +1019,7 @@ export default function Gallery({
     });
 
     return (
-      <main ref={scrollRef} suppressHydrationWarning className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto bg-white p-4">
+      <main ref={scrollRef} suppressHydrationWarning className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto bg-white p-4 [overflow-anchor:none]">
         {banner}
         {groups.map(({ letter, items }) => (
           <section key={letter} className="flex flex-col gap-3.5">
@@ -1138,7 +1146,7 @@ export default function Gallery({
   }
 
   return (
-    <main ref={scrollRef} suppressHydrationWarning className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4">
+    <main ref={scrollRef} suppressHydrationWarning className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white p-4 [overflow-anchor:none]">
       {banner}
       <div className="flex flex-1 items-start gap-3.5">
       {buckets.map((col, i) => (
