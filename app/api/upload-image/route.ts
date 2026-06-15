@@ -1,14 +1,9 @@
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
-// In-memory rate limiter: max 20 direct-upload URLs per admin per hour.
-const RATE_LIMIT = 20;
-const WINDOW_MS = 60 * 60 * 1000;
-const hits = new Map<string, { count: number; resetAt: number }>();
-
 // Returns a one-time Cloudflare direct-creator-upload URL so the browser can
-// POST the image straight to Cloudflare (no server hop). Admin-only + rate
-// limited; the token stays server-only here.
+// POST the image straight to Cloudflare (no server hop). Admin-only; the token
+// stays server-only here.
 export async function GET() {
   const cookieStore = await cookies();
   const supabase = createServerClient(
@@ -29,17 +24,6 @@ export async function GET() {
     .single();
   if (profile?.role !== "admin")
     return Response.json({ error: "Forbidden" }, { status: 403 });
-
-  // Rate limit per admin user id.
-  const now = Date.now();
-  const entry = hits.get(user.id);
-  if (!entry || now > entry.resetAt) {
-    hits.set(user.id, { count: 1, resetAt: now + WINDOW_MS });
-  } else {
-    if (entry.count >= RATE_LIMIT)
-      return Response.json({ error: "Too many requests" }, { status: 429 });
-    entry.count += 1;
-  }
 
   const res = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/images/v2/direct_upload`,

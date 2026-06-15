@@ -423,7 +423,14 @@ export default function UploadForm({
         // via a one-time direct-upload URL (no server hop).
         const { file: compressed, aspectRatio } = await compressImage(file);
         const res = await fetch("/api/upload-image");
-        const { uploadURL, id } = await res.json();
+        const { uploadURL, id, error: upErr } = await res.json();
+        if (!res.ok || !uploadURL) {
+          throw new Error(
+            res.status === 429
+              ? "Upload limit reached (20/hour). Try again later."
+              : upErr || "Could not start upload. Please try again.",
+          );
+        }
         const form = new FormData();
         form.append("file", compressed);
         const up = await fetch(uploadURL, { method: "POST", body: form });
@@ -446,7 +453,8 @@ export default function UploadForm({
         aspect_ratio,
         colors: dbColors,
         colors_hsl,
-        featured,
+        // Logos have no pinned row — never store them as featured.
+        featured: category === "Logo" ? false : featured,
       };
 
       const query = componentId
@@ -739,32 +747,34 @@ export default function UploadForm({
       </div>
       )}
 
-      {/* Show on top */}
-      <div className="mt-6 flex items-center justify-between rounded-xl border border-[#e7e9ee] bg-white px-3 py-3">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium tracking-[-0.03em] text-[#09090b]">
-            Show on top
-          </span>
-          <span className="text-xs tracking-[-0.03em] text-[#71717b]">
-            Pin this component to the top of the gallery.
-          </span>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={featured}
-          onClick={() => setFeatured((v) => !v)}
-          className={`relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors ${
-            featured ? "bg-[#09090b]" : "bg-[#e4e4e7]"
-          }`}
-        >
-          <span
-            className={`absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow-sm transition-transform ${
-              featured ? "translate-x-5" : "translate-x-0"
+      {/* Show on top — not applicable to logos (no pinned row in that view). */}
+      {category !== "Logo" && (
+        <div className="mt-6 flex items-center justify-between rounded-xl border border-[#e7e9ee] bg-white px-3 py-3">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium tracking-[-0.03em] text-[#09090b]">
+              Show on top
+            </span>
+            <span className="text-xs tracking-[-0.03em] text-[#71717b]">
+              Pin this component to the top of the gallery.
+            </span>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={featured}
+            onClick={() => setFeatured((v) => !v)}
+            className={`relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors ${
+              featured ? "bg-[#09090b]" : "bg-[#e4e4e7]"
             }`}
-          />
-        </button>
-      </div>
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow-sm transition-transform ${
+                featured ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
+      )}
 
       {error && (
         <p className="mt-3 text-sm tracking-[-0.03em] text-[#ef4444]">{error}</p>
