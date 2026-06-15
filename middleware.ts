@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-// Protects /upload: only authenticated users whose profiles.role = 'admin' may
-// reach it. Everyone else is redirected to /. Role is checked server-side here.
+// Protects /upload and /analytics: only authenticated users whose
+// profiles.role = 'admin' may reach them. Everyone else is redirected to /.
+// Role is checked server-side here.
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
 
@@ -46,7 +47,7 @@ export async function middleware(request: NextRequest) {
   return response;
 }
 
-// Only run on /upload routes.
+// Only run on the admin-gated routes.
 export const config = {
-  matcher: ["/upload", "/upload/:path*"],
+  matcher: ["/upload", "/upload/:path*", "/analytics", "/analytics/:path*"],
 };

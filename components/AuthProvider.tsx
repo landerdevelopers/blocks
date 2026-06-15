@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type Profile } from "@/store/authStore";
+import { todayIST } from "@/lib/ist";
 import OnboardingModal from "./OnboardingModal";
 
 export default function AuthProvider({
@@ -51,12 +52,25 @@ export default function AuthProvider({
       setShowOnboarding(true);
     };
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       // First resolution of auth state — unblocks the homepage gate.
       setAuthLoading(false);
       if (session?.user) {
         setEmail(session.user.email ?? null);
         loadProfile(session.user.id);
+        // Log a login on an actual sign-in (not INITIAL_SESSION / refresh).
+        // Fire-and-forget — analytics-only, must never block auth. Upsert with
+        // ignoreDuplicates → at most one row per user per IST day (dedup via the
+        // unique index on (user_id, date)). IST date matches copy_events.date.
+        if (event === "SIGNED_IN") {
+          supabase
+            .from("login_events")
+            .upsert(
+              { user_id: session.user.id, date: todayIST() },
+              { onConflict: "user_id,date", ignoreDuplicates: true },
+            )
+            .then(() => {});
+        }
       } else {
         // Never close onboarding from here — only the modal closes itself
         // after a successful submit.

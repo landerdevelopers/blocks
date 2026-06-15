@@ -63,6 +63,15 @@ create table if not exists public.copy_events (
   date         date        not null default current_date
 );
 
+-- One row per successful login, written from the client on the SIGNED_IN auth
+-- event. `date` is the login day (set client-side). Powers the analytics page.
+create table if not exists public.login_events (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid references public.profiles (id) on delete cascade,
+  date       date        not null default current_date,
+  created_at timestamptz not null default now()
+);
+
 -- Improvement suggestions submitted from the "Suggest Improvements" modal.
 -- user_id is null for logged-out submitters.
 create table if not exists public.improvements (
@@ -80,6 +89,12 @@ create index if not exists components_colors_gin_idx  on public.components using
 create index if not exists components_colors_hsl_gin_idx on public.components using gin (colors_hsl jsonb_path_ops);
 create index if not exists copy_events_user_idx      on public.copy_events (user_id);
 create index if not exists copy_events_component_idx on public.copy_events (component_id);
+create index if not exists login_events_user_idx     on public.login_events (user_id);
+create index if not exists login_events_date_idx     on public.login_events (date);
+-- Dedup: at most one login row per user per day. Doubles as the ON CONFLICT
+-- target for the client-side upsert in AuthProvider.
+create unique index if not exists login_events_user_date_uniq
+  on public.login_events (user_id, date);
 
 -- -----------------------------------------------------------------------------
 -- New-user trigger: auto-create a profile row for every auth.users insert.
@@ -164,6 +179,10 @@ grant insert, update, delete on public.components to authenticated;
 -- copy_events: a logged-in user inserts/reads their own copy log.
 grant select, insert on public.copy_events to authenticated;
 
+-- login_events: a logged-in user inserts/reads their own login log. Analytics
+-- reads happen via the service-role client, which bypasses RLS entirely.
+grant select, insert on public.login_events to authenticated;
+
 -- -----------------------------------------------------------------------------
 -- Row Level Security
 -- -----------------------------------------------------------------------------
@@ -171,6 +190,7 @@ grant select, insert on public.copy_events to authenticated;
 alter table public.profiles     enable row level security;
 alter table public.components   enable row level security;
 alter table public.copy_events  enable row level security;
+alter table public.login_events enable row level security;
 alter table public.improvements enable row level security;
 
 -- profiles: users may read, insert, and update only their own row.
@@ -266,6 +286,22 @@ create policy "Copy events: insert own"
 drop policy if exists "Copy events: select own" on public.copy_events;
 create policy "Copy events: select own"
   on public.copy_events
+  for select
+  to authenticated
+  using (auth.uid() = user_id);
+
+-- login_events: users may insert and read only their own rows. (Analytics
+-- reads go through the service-role client and bypass these policies.)
+drop policy if exists "Login events: insert own" on public.login_events;
+create policy "Login events: insert own"
+  on public.login_events
+  for insert
+  to authenticated
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Login events: select own" on public.login_events;
+create policy "Login events: select own"
+  on public.login_events
   for select
   to authenticated
   using (auth.uid() = user_id);
