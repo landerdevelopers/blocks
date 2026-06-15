@@ -49,6 +49,9 @@ create table if not exists public.components (
   -- featured: pins the component to the top of the gallery (sorted before
   -- created_at). Toggled via the upload/edit form's "Show on top" switch.
   featured     boolean     not null default false,
+  -- featured_at: when the component was last pinned to top via the admin arrow.
+  -- Most recently pinned sorts first among featured rows. Null = never pinned.
+  featured_at  timestamptz,
   created_at   timestamptz not null default now(),
   -- Dashboard and Logos have no section; only Website / Mobile Apps may set one.
   constraint components_section_check
@@ -82,7 +85,11 @@ create table if not exists public.improvements (
 );
 
 -- Helpful indexes for the common access paths.
+-- Backfill for databases created before featured_at existed.
+alter table public.components add column if not exists featured_at timestamptz;
+
 create index if not exists components_category_idx   on public.components (category);
+create index if not exists components_featured_at_idx on public.components (featured_at desc nulls last);
 create index if not exists components_published_idx  on public.components (is_published);
 create index if not exists components_filters_idx    on public.components using gin (filters);
 create index if not exists components_colors_gin_idx  on public.components using gin (colors jsonb_path_ops);

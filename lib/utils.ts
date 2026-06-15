@@ -20,6 +20,18 @@ export function cloudflareFull(url: string): string {
     .replace(/\/public\//, `/${params}/`);
 }
 
+// Logo delivery variant — crisp but right-sized for the small logo cards.
+// "/public" (2560px full) was wildly oversized for a ~150px card, so logos
+// loaded slowly one-by-one. 1000px @ q90 stays sharp and loads fast. scale-down
+// never upscales smaller originals. No-op for non-Cloudflare URLs.
+export function cloudflareLogo(url: string): string {
+  if (!url || !url.includes("imagedelivery.net")) return url;
+  const params = "w=1000,q=90,fit=scale-down,f=auto";
+  return url
+    .replace(/\/public$/, `/${params}`)
+    .replace(/\/public\//, `/${params}/`);
+}
+
 // Convert a "#RRGGBB" hex string to HSL (h 0-360, s/l 0-100).
 // Used at upload time (precompute) and by client-side color search.
 export function hexToHsl(hex: string): { h: number; s: number; l: number } {

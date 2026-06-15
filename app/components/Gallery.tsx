@@ -11,14 +11,14 @@ import {
   type MouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { Megaphone, Pencil, Trash2 } from "lucide-react";
+import { ArrowUp, Megaphone, Pencil, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 import {
   readComponentsCache,
   writeComponentsCache,
 } from "@/lib/componentsCache";
-import { cloudflareThumb, cloudflareFull } from "@/lib/utils";
+import { cloudflareThumb, cloudflareFull, cloudflareLogo } from "@/lib/utils";
 type Component = GalleryComponent;
 
 const PAGE_SIZE = 24;
@@ -165,12 +165,19 @@ export default function Gallery({
       let query = createClient()
         .from("components")
         .select(
-          "id, category, section, filters, figma_url, preview_url, aspect_ratio, colors, featured",
+          "id, category, section, filters, figma_url, preview_url, aspect_ratio, colors, featured, featured_at",
         )
         .eq("is_published", true);
       if (dbCat) query = query.eq("category", dbCat);
+      // Logos paginate ALPHABETICALLY by letter (stored in `filters`) so each
+      // 24-batch fills letters top-down A→Z; within a letter, pinned-first.
+      // Other categories: pinned-first, then newest.
+      if (dbCat === "Logos") {
+        query = query.order("filters", { ascending: true });
+      }
       const { data, error } = await query
         .order("featured", { ascending: false })
+        .order("featured_at", { ascending: false, nullsFirst: false })
         .order("created_at", { ascending: false })
         .range(from, to);
       if (error) {
@@ -515,8 +522,33 @@ export default function Gallery({
     return () => document.removeEventListener("keydown", onKey);
   }, [lightbox]);
 
-  // Admin controls — Edit + Delete, shown on hover. Slide in from the top.
-  // Positions computed in px from the box size so the two buttons never overlap.
+  // Admin: pin a component to the very top. Sets featured + a fresh featured_at
+  // (the sort key) in the DB; optimistically marks it featured and moves it to
+  // the front of the list so it jumps up instantly. In the logos view the list
+  // order drives each letter group, so the pinned logo leads its own letter.
+  const pinToTop = async (id: string) => {
+    const current = useAuthStore.getState().components;
+    const target = current.find((c) => c.id === id);
+    if (!target) return;
+    const next = [
+      { ...target, featured: true, featured_at: new Date().toISOString() },
+      ...current.filter((c) => c.id !== id),
+    ];
+    setComponents(next);
+    // Keep this category's cache in sync so a switch-and-back keeps the order.
+    const total = dbCategory
+      ? (categoryCounts[dbCategory] ?? next.length)
+      : next.length;
+    writeComponentsCache(category ?? "website", next, total);
+    const { error } = await createClient()
+      .from("components")
+      .update({ featured: true, featured_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) console.error("[gallery] pinToTop:", error.message);
+  };
+
+  // Admin controls — Pin + Edit + Delete, shown on hover. Slide in from the top.
+  // Positions computed in px from the box size so the buttons never overlap.
   const adminButtons = (id: string, dark = false) => {
     if (!isAdmin) return null;
     const k = KBOX[Math.min(6, Math.max(1, cols))] ?? KBOX[3];
@@ -560,6 +592,25 @@ export default function Gallery({
           className={`${base} ${tone} hover:text-[#ef4444]`}
         >
           <Trash2 size={k.icon} strokeWidth={2} />
+        </button>
+
+        {/* Send to top — pins this component above the rest. */}
+        <button
+          type="button"
+          aria-label="Send to top"
+          onClick={(e) => {
+            e.stopPropagation();
+            pinToTop(id);
+          }}
+          style={{
+            width: k.box,
+            height: k.box,
+            top: pad,
+            [sideKey]: pad + 2 * (k.box + gap),
+          }}
+          className={`${base} ${tone}`}
+        >
+          <ArrowUp size={k.icon} strokeWidth={2} />
         </button>
       </>
     );
@@ -1057,10 +1108,12 @@ export default function Gallery({
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         alt=""
-                        // Logos have no lightbox/modal — always serve the
-                        // high-quality variant so they never look soft.
-                        src={cloudflareFull(c.preview_url ?? "")}
+                        // Logos have no lightbox/modal — serve a crisp, right-
+                        // sized variant. First row eager, rest lazy so they
+                        // batch with pagination like every other category.
+                        src={cloudflareLogo(c.preview_url ?? "")}
                         loading={idx < n ? "eager" : "lazy"}
+                        decoding="async"
                         ref={(el) => {
                           if (el && el.complete && el.naturalWidth > 0)
                             el.style.opacity = "1";

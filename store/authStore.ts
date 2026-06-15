@@ -38,6 +38,9 @@ export type GalleryComponent = {
   colors: { hex: string; pct: number | null }[] | null;
   // Pins the component to the top of the gallery (sorted before created_at).
   featured: boolean;
+  // When the component was last pinned to top (via the admin arrow). Most
+  // recently pinned sorts first among featured. Null for never-pinned rows.
+  featured_at?: string | null;
 };
 
 type AuthState = {
