@@ -129,6 +129,10 @@ function HomeInner() {
   const authLoading = useAuthStore((s) => s.authLoading);
   const setShowOnboarding = useAuthStore((s) => s.setShowOnboarding);
   const isAdmin = useAuthStore((s) => s.isAdmin);
+  // Session email is set as soon as a session exists — i.e. before the profile
+  // finishes loading. Used to detect "already signing in" so the beta-claim
+  // flow doesn't flash the login modal during that gap.
+  const sessionEmail = useAuthStore((s) => s.email);
   const loggedIn = !!profile;
   // Admins and beta users get every category; everyone else gets Website only.
   const fullAccess = isAdmin || !!profile?.beta;
@@ -161,11 +165,19 @@ function HomeInner() {
     window.history.replaceState({}, "", qs ? `?${qs}` : window.location.pathname);
   }, [searchParams]);
 
-  // A pending beta claim + a logged-out visitor → prompt login so they can claim.
+  // A pending beta claim + a truly logged-out visitor → prompt login so they can
+  // claim. Gate on sessionEmail too: right after the login redirect the session
+  // exists but the profile is still loading, and we must NOT reopen the modal.
   useEffect(() => {
-    if (authLoading || loggedIn) return;
+    if (authLoading || loggedIn || sessionEmail) return;
     if (localStorage.getItem(BETA_PENDING_KEY) === "1") setShowLogin(true);
-  }, [authLoading, loggedIn]);
+  }, [authLoading, loggedIn, sessionEmail]);
+
+  // Once a session exists, never keep the login modal open (covers the case
+  // where it was opened for a logged-out beta visitor who has now signed in).
+  useEffect(() => {
+    if (sessionEmail) setShowLogin(false);
+  }, [sessionEmail]);
 
   // Apply a pending beta claim to the account once the profile is available.
   useEffect(() => {
