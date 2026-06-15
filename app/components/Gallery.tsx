@@ -1049,7 +1049,9 @@ export default function Gallery({
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         alt=""
-                        src={cloudflareThumb(c.preview_url ?? "")}
+                        // Logos have no lightbox/modal — always serve the
+                        // high-quality variant so they never look soft.
+                        src={cloudflareFull(c.preview_url ?? "")}
                         loading={idx < n ? "eager" : "lazy"}
                         ref={(el) => {
                           if (el && el.complete && el.naturalWidth > 0)
