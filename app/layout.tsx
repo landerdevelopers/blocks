@@ -20,9 +20,9 @@ export const metadata: Metadata = {
   metadataBase: new URL(
     process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
   ),
-  title: "Blocks — Production-Ready Figma Source Files",
+  title: "Free Figma Design Resources for Designers",
   description:
-    "Premium web, mobile, dashboard, and branding design source files. Fully editable, production-ready, and built to accelerate your next project.",
+    "Explore free Figma design blocks, website sections, app screens, dashboards, and logos created by Lander Studio to help designers build faster and design better.",
   keywords: [
     "Figma",
     "Figma blocks",
@@ -33,9 +33,9 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: "Lander Studio", url: "https://lander.studio/" }],
   openGraph: {
-    title: "Blocks — Production-Ready Figma Source Files",
+    title: "Free Figma Design Resources for Designers",
     description:
-      "Premium web, mobile, dashboard, and branding design source files. Fully editable, production-ready, and built to accelerate your next project.",
+      "Explore free Figma design blocks, website sections, app screens, dashboards, and logos created by Lander Studio to help designers build faster and design better.",
     type: "website",
     siteName: "Blocks",
     images: [
@@ -49,9 +49,9 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Blocks — Production-Ready Figma Source Files",
+    title: "Free Figma Design Resources for Designers",
     description:
-      "Premium web, mobile, dashboard, and branding design source files. Fully editable, production-ready, and built to accelerate your next project.",
+      "Explore free Figma design blocks, website sections, app screens, dashboards, and logos created by Lander Studio to help designers build faster and design better.",
     images: ["/og.png"],
   },
 };
