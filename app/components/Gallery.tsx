@@ -139,10 +139,6 @@ export default function Gallery({
   // Synchronous in-flight lock for pagination — blocks a second page fetch
   // before React re-renders (state-based guards lag a render).
   const fetchingPageRef = useRef(false);
-  // Hidden contenteditable focused right before execCommand('copy') — Safari
-  // returns false from execCommand with no focused editable element.
-  const hiddenCopyRef = useRef<HTMLDivElement>(null);
-
   // The store is seeded from this category's cache in the mount/category effect
   // below (not during render — that would setState mid-render and update other
   // subscribers like AuthProvider). The `mounted` gate shows a skeleton on the
@@ -567,26 +563,14 @@ export default function Gallery({
   const copyButton = (id: string, dark: boolean, figmaUrl: string | null) => {
     const isCopied = copied === id;
     const isCopying = copying === id;
-    // Zero-await clipboard write — the entire op is synchronous, called from
-    // inside a .then() callback once the data is already resolved. This is what
-    // makes execCommand('copy') honored on Safari. Focus the hidden
-    // contenteditable first so Safari has an editable target.
-    const writeClipboard = (html: string) => {
-      hiddenCopyRef.current?.focus();
-      const listener = (e: ClipboardEvent) => {
-        e.clipboardData?.setData("text/html", html);
-        e.clipboardData?.setData("text/plain", figmaUrl || "");
-        e.preventDefault();
-      };
-      document.addEventListener("copy", listener);
-      document.execCommand("copy");
-      document.removeEventListener("copy", listener);
-      hiddenCopyRef.current?.blur();
-    };
 
-    // Click handler — SYNCHRONOUS. Only sync guards, then fire the Promise
-    // chain without awaiting it. The clipboard write happens inside .then(),
-    // never after an await in this function (the ui.live onSuccess pattern).
+    // Click handler — SYNCHRONOUS. The clipboard write MUST be issued inside
+    // the gesture or Safari (WebKit) drops the transient user activation and
+    // silently writes nothing. We can't await the limit-check / figma_data
+    // fetch before writing, so we hand `navigator.clipboard.write` a
+    // ClipboardItem whose Blob is a Promise: Safari keeps the activation alive
+    // while that promise resolves the network round-trip internally. This is
+    // the WebKit-sanctioned async-clipboard pattern and works on Chrome/FF too.
     const onClick = (e: MouseEvent) => {
       e.stopPropagation(); // don't trigger the image lightbox
       if (copyLockRef.current) return;
@@ -601,8 +585,9 @@ export default function Gallery({
       if (abortRef.current) abortRef.current.abort();
       abortRef.current = new AbortController();
 
-      // Limit check + figma_data fetch in parallel; resolve both, then write.
-      Promise.all([
+      // Limit check + figma_data fetch in parallel. Rejecting this promise
+      // (limit hit) aborts the clipboard write so nothing is copied.
+      const resolved = Promise.all([
         onCopy(id),
         createClient()
           .from("components")
@@ -615,15 +600,27 @@ export default function Gallery({
               (data as { figma_data: string | null } | null)?.figma_data ??
               null,
           ),
-      ])
-        .then(([allowed, fd]) => {
-          if (!allowed) return;
-          if (fd) {
-            writeClipboard(fd);
-          } else if (figmaUrl) {
-            navigator.clipboard.writeText(figmaUrl);
-          }
-          markCopied(id);
+      ]).then(([allowed, fd]) => {
+        if (!allowed) throw new Error("copy-limit-reached");
+        return fd;
+      });
+
+      // Issued synchronously — the Blob promises resolve after the fetch.
+      navigator.clipboard
+        .write([
+          new ClipboardItem({
+            "text/html": resolved.then(
+              (fd) =>
+                new Blob([fd || figmaUrl || ""], { type: "text/html" }),
+            ),
+            "text/plain": resolved.then(
+              () => new Blob([figmaUrl || ""], { type: "text/plain" }),
+            ),
+          }),
+        ])
+        .then(() => markCopied(id))
+        .catch(() => {
+          // limit reached or clipboard blocked — leave button in idle state
         })
         .finally(() => {
           copyLockRef.current = false;
@@ -744,27 +741,6 @@ export default function Gallery({
       <div className="size-2.5 shrink-0 rounded-[2px] border border-[#E7E9EE] bg-white" />
       <div className="h-0 w-[88px] border-t border-solid [border-image:linear-gradient(to_right,#E7E9EE,transparent)_1]" />
     </div>
-  );
-
-  // Hidden contenteditable target for execCommand('copy') on Safari. Rendered
-  // in every copy-capable view; only one renders at a time so the single ref
-  // attaches cleanly.
-  const hiddenCopyEl = (
-    <div
-      ref={hiddenCopyRef}
-      contentEditable
-      suppressContentEditableWarning
-      style={{
-        position: "fixed",
-        opacity: 0,
-        pointerEvents: "none",
-        width: 1,
-        height: 1,
-        overflow: "hidden",
-        top: -9999,
-        left: -9999,
-      }}
-    />
   );
 
   const renderLightbox = () =>
@@ -908,7 +884,6 @@ export default function Gallery({
         <div ref={colorSentinelRef} style={{ height: 1 }} />
         {/* End of color-search results. */}
         {!colorSearchHasMore && list.length > 0 && endMarker}
-        {hiddenCopyEl}
         {renderLightbox()}
         {renderDeleteModal()}
       </main>
@@ -1118,7 +1093,6 @@ export default function Gallery({
             infinite scroll works whether idle or loading. */}
         <div ref={firstSkeletonRef} style={{ height: 1 }} />
         {endReached && endMarker}
-        {hiddenCopyEl}
         {renderLightbox()}
         {renderDeleteModal()}
       </main>
@@ -1242,7 +1216,6 @@ export default function Gallery({
       ))}
       </div>
       {endReached && endMarker}
-      {hiddenCopyEl}
       {renderLightbox()}
       {renderDeleteModal()}
     </main>
