@@ -129,14 +129,11 @@ function HomeInner() {
   const setProfile = useAuthStore((s) => s.setProfile);
   const authLoading = useAuthStore((s) => s.authLoading);
   const setShowOnboarding = useAuthStore((s) => s.setShowOnboarding);
-  const isAdmin = useAuthStore((s) => s.isAdmin);
   // Session email is set as soon as a session exists — i.e. before the profile
   // finishes loading. Used to detect "already signing in" so the beta-claim
   // flow doesn't flash the login modal during that gap.
   const sessionEmail = useAuthStore((s) => s.email);
   const loggedIn = !!profile;
-  // Admins and beta users get every category; everyone else gets Website only.
-  const fullAccess = isAdmin || !!profile?.beta;
 
   // Fresh magic-link login → open onboarding immediately, before any auth event.
   const searchParams = useSearchParams();
@@ -364,27 +361,17 @@ function HomeInner() {
     setColorSearchLoading(false);
   };
 
-  // Persist the active category to localStorage. Admins also reflect it in the
-  // URL (?category=…) for refresh/share; normal users get no category in the URL
-  // (any legacy ?category is stripped).
+  // Persist the active category to localStorage AND reflect it in the URL
+  // (?category=…) for everyone, so refresh/share keeps the same category (all
+  // categories are public now).
   useEffect(() => {
     if (typeof window === "undefined") return;
     const cat = activeCategory ?? "website";
     localStorage.setItem("active_category", cat);
     const params = new URLSearchParams(window.location.search);
-    if (fullAccess) {
-      params.set("category", cat);
-      window.history.replaceState({}, "", `?${params.toString()}`);
-    } else if (params.has("category")) {
-      params.delete("category");
-      const qs = params.toString();
-      window.history.replaceState(
-        {},
-        "",
-        qs ? `?${qs}` : window.location.pathname,
-      );
-    }
-  }, [activeCategory, fullAccess]);
+    params.set("category", cat);
+    window.history.replaceState({}, "", `?${params.toString()}`);
+  }, [activeCategory]);
 
   // Persist the single shared column count to localStorage.
   useEffect(() => {
