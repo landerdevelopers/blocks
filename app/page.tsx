@@ -14,6 +14,7 @@ import Gallery from "./components/Gallery";
 import LoginModal from "./components/LoginModal";
 import AccountModal from "./components/AccountModal";
 import LimitModal from "./components/LimitModal";
+import CreatorProgramModal from "./components/CreatorProgramModal";
 import { createClient } from "@/lib/supabase/client";
 import {
   useAuthStore,
@@ -212,6 +213,10 @@ function HomeInner() {
   const [showLogin, setShowLogin] = useState(false);
   const [loginNotice, setLoginNotice] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
+  const [showCreatorProgram, setShowCreatorProgram] = useState(false);
+  // When set (from the sidebar "All Creators" popup), the gallery shows only
+  // this creator's designs instead of the category list.
+  const [creatorId, setCreatorId] = useState<string | null>(null);
   const [used, setUsed] = useState(0);
   const [showLimit, setShowLimit] = useState(false);
   const [showSuggest, setShowSuggest] = useState(false);
@@ -431,6 +436,17 @@ function HomeInner() {
     useAuthStore.persist.clearStorage();
   };
 
+  // "Become a Creator" — logged-in users get the application modal; logged-out
+  // users are sent to the login modal first.
+  const becomeCreator = () => {
+    setShowAccount(false);
+    if (!profile) {
+      openLogin(false);
+      return;
+    }
+    setShowCreatorProgram(true);
+  };
+
   // Seed `used` from the DB so the count survives refreshes. If the profile's
   // last copy was on a previous IST day, it's a new day → start at 0.
   useEffect(() => {
@@ -533,6 +549,8 @@ function HomeInner() {
         onColorClear={clearColorSearch}
         onColorPickerOpen={loadColorSearchPool}
         activeCategory={activeCategory}
+        onBecomeCreator={becomeCreator}
+        onCreatorSelect={setCreatorId}
       />
       {/* Gallery panel — rounded top-left corner; the banner scrolls with the
           gallery content (rendered inside Gallery). */}
@@ -544,6 +562,7 @@ function HomeInner() {
           onCopy={tryCopy}
           category={activeCategory}
           filters={activeFilters}
+          creatorId={creatorId}
           colorSearchActive={colorSearchActive}
           colorSearchLoading={colorSearchLoading}
           colorSearchResults={colorSearchResults}
@@ -563,12 +582,18 @@ function HomeInner() {
         onClose={() => setShowAccount(false)}
         onLogout={logout}
         used={used}
+        onBecomeCreator={becomeCreator}
+      />
+
+      <CreatorProgramModal
+        open={showCreatorProgram}
+        onClose={() => setShowCreatorProgram(false)}
       />
 
       <LimitModal
         open={showLimit}
         onClose={() => setShowLimit(false)}
-        limit={DAILY_LIMIT}
+        limit={profile?.role === "creator" ? 50 : DAILY_LIMIT}
       />
 
       {/* Floating bottom-right action — logged-in only. Hidden once the weekly

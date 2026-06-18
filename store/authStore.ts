@@ -24,6 +24,14 @@ export type Profile = {
   // Beta access — set true when the user claims the beta link while logged in.
   // Unlocks all categories (read access), following the account across devices.
   beta?: boolean;
+  // Creator handle (public URL /creators/<username>) + editable bio. Null until
+  // the user becomes a creator (handle generated on first "Become Creator").
+  username?: string | null;
+  bio?: string | null;
+  // Set true once an approved creator picks their handle in the post-approval
+  // "Choose your username" modal. While false (and role === 'creator') the modal
+  // is forced on next visit.
+  creator_onboarded?: boolean;
 };
 
 // Minimal component shape the gallery renders.
@@ -57,6 +65,11 @@ type AuthState = {
   setAuthLoading: (loading: boolean) => void;
   showOnboarding: boolean;
   setShowOnboarding: (show: boolean) => void;
+  // Whether the signed-in user has a pending creator application. Prefetched on
+  // sign-in so the account/sidebar "Become a Creator" CTA renders instantly
+  // (no per-open query flash). null = not checked yet.
+  pendingCreatorApp: boolean | null;
+  setPendingCreatorApp: (v: boolean | null) => void;
   // Shared gallery list — kept in sync so uploads appear instantly.
   components: GalleryComponent[];
   componentsLoaded: boolean;
@@ -101,6 +114,8 @@ export const useAuthStore = create<AuthState>()(
       setAuthLoading: (loading) => set({ authLoading: loading }),
       showOnboarding: false,
       setShowOnboarding: (show) => set({ showOnboarding: show }),
+      pendingCreatorApp: null,
+      setPendingCreatorApp: (v) => set({ pendingCreatorApp: v }),
       components: [],
       componentsLoaded: false,
       currentCategory: "website",

@@ -3,6 +3,7 @@
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { useAuthStore } from "@/store/authStore";
 import UploadForm, { type UploadInitialValues } from "@/components/UploadForm";
 
 export default function EditComponentPage({
@@ -12,25 +13,38 @@ export default function EditComponentPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
+  const isAdmin = useAuthStore((s) => s.isAdmin);
+  const profile = useAuthStore((s) => s.profile);
   const [initial, setInitial] = useState<UploadInitialValues | null>(null);
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     const load = async () => {
       const supabase = createClient();
-      // figma_data isn't directly selectable (column grant excludes it); read it
-      // through the admin-only RPC instead.
+      // Read incl. uploaded_by/is_published so we can enforce ownership.
+      // figma_data isn't directly selectable — get_editable_figma_data returns
+      // it for admins (any) and creators (their own, unpublished).
       const [{ data }, { data: figmaData }] = await Promise.all([
         supabase
           .from("components")
-          .select("preview_url, aspect_ratio, category, section, filters, colors, featured")
+          .select(
+            "preview_url, aspect_ratio, category, section, filters, colors, featured, uploaded_by, is_published",
+          )
           .eq("id", id)
           .single(),
-        supabase.rpc("get_component_figma_data", { component_id: id }),
+        supabase.rpc("get_editable_figma_data", { component_id: id }),
       ]);
 
       if (!data) {
         setNotFound(true);
+        return;
+      }
+
+      // Ownership guard: non-admins may only edit their own component, and only
+      // while it's unpublished. (RLS also blocks the write — defense in depth.)
+      const owns = !!profile && data.uploaded_by === profile.id;
+      if (!isAdmin && (!owns || data.is_published)) {
+        router.replace("/");
         return;
       }
 
@@ -46,7 +60,7 @@ export default function EditComponentPage({
       });
     };
     load();
-  }, [id]);
+  }, [id, isAdmin, profile, router]);
 
   return (
     <main className="flex min-h-screen justify-center bg-[#f5f5f5] px-4 py-10 font-sans">

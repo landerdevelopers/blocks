@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, Plus, Minus, User, LogOut } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ChevronDown, Plus, Minus, User, LogOut, ChevronsUpDown, Search, CirclePlus, ExternalLink } from "lucide-react";
 import ColorSearch from "./ColorSearch";
+import { ScrollFadeEffect } from "@/components/scroll-fade-effect";
 import { useAuthStore } from "@/store/authStore";
 import { createClient } from "@/lib/supabase/client";
 
@@ -19,6 +21,16 @@ function trackLanderClick() {
     // never block the visitor
   }
 }
+
+// A creator row in the "All Creators" popup (one row from list_creators()).
+type Creator = {
+  id: string;
+  username: string;
+  full_name: string | null;
+  avatar_url: string | null;
+  bio: string | null;
+  count: number;
+};
 
 // Sidebar section id -> public.components.category value.
 const CAT_MAP: Record<string, string> = {
@@ -318,6 +330,8 @@ export default function Sidebar({
   onColorClear,
   onColorPickerOpen,
   activeCategory,
+  onBecomeCreator,
+  onCreatorSelect,
 }: {
   cols: number;
   onColsChange: (n: number) => void;
@@ -333,9 +347,62 @@ export default function Sidebar({
   // The category the gallery is currently showing (may differ from the open
   // accordion — a closed accordion still shows the last-opened category).
   activeCategory?: string | null;
+  // Open the "Join the Creator Program" modal (handled by the parent).
+  onBecomeCreator?: () => void;
+  // A creator was picked (id) or cleared (null) — parent filters the gallery to
+  // that creator's components.
+  onCreatorSelect?: (creatorId: string | null) => void;
 }) {
+  const router = useRouter();
   const profile = useAuthStore((s) => s.profile);
   const authLoading = useAuthStore((s) => s.authLoading);
+
+  // The signed-in user's own creator handle. Only set once an approved creator
+  // (or admin) has completed username onboarding → drives the "Open Creator
+  // Portal" footer button.
+  const myUsername = profile?.username ?? null;
+
+  // Creators popup (anchored to the "All Creators" row). Creators are loaded
+  // once when the popup first opens (list_creators RPC).
+  const [creatorsOpen, setCreatorsOpen] = useState(false);
+  const [creatorQuery, setCreatorQuery] = useState("");
+  // Selected creator — drives the sidebar header/bio AND, via onCreatorSelect,
+  // filters the gallery to just their designs.
+  const [selectedCreator, setSelectedCreator] = useState<Creator | null>(null);
+  // Real creators, loaded once the first time the popup opens (list_creators).
+  const [creators, setCreators] = useState<Creator[]>([]);
+  const [creatorsLoaded, setCreatorsLoaded] = useState(false);
+  useEffect(() => {
+    if (!creatorsOpen || creatorsLoaded) return;
+    createClient()
+      .rpc("list_creators")
+      .then(({ data }) => {
+        setCreators((data as Creator[]) ?? []);
+        setCreatorsLoaded(true);
+      });
+  }, [creatorsOpen, creatorsLoaded]);
+  const filteredCreators = creators.filter((c) =>
+    (c.full_name ?? c.username).toLowerCase().includes(creatorQuery.toLowerCase()),
+  );
+
+  // Pick a creator (or clear back to All Creators) — updates the sidebar UI and
+  // tells the parent to filter the gallery.
+  const pickCreator = (c: Creator | null) => {
+    setSelectedCreator(c);
+    onCreatorSelect?.(c?.id ?? null);
+    setCreatorsOpen(false);
+  };
+
+  // "Become a Creator" — opens the Creator Program modal (handled by parent).
+  const becomeCreator = () => {
+    setCreatorsOpen(false);
+    onBecomeCreator?.();
+  };
+
+  // Pending creator application — prefetched at sign-in (AuthProvider), so the
+  // footer CTA is correct the instant the popup opens (no query flash).
+  const hasPendingApplication =
+    useAuthStore((s) => s.pendingCreatorApp) === true;
 
   // `cols` derives from localStorage on the client, so the SSR value differs.
   // Render the column-split segments only after mount to avoid a hydration
@@ -400,35 +467,211 @@ export default function Sidebar({
     <aside className="flex h-full w-[325px] shrink-0 flex-col p-[18px]">
       {/* Scrollable region (brand scrolls with the options) + fade overlays */}
       <div className="relative min-h-0 flex-1">
-        <div className="absolute inset-0 flex flex-col gap-[18px] overflow-y-auto pb-6 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {/* Brand */}
+        <div
+          className={`absolute inset-0 flex flex-col gap-[18px] pb-6 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+            creatorsOpen ? "overflow-hidden" : "overflow-y-auto"
+          }`}
+        >
+          {/* Creators */}
           <div className="flex shrink-0 flex-col gap-1.5">
-            <p className="text-xl font-medium tracking-[-0.03em] text-[#09090b]">
-              Figma Blocks
-            </p>
-            <div className="flex flex-col gap-0.5">
-              <p className="text-base tracking-[-0.03em] text-[#71717b]">
-                Blocks is a growing library of design
-              </p>
-              <div className="flex items-center gap-1.5">
-                <p className="text-base tracking-[-0.03em] text-[#71717b]">
-                  resources created by
-                </p>
-                <a
-                  href="https://lander.studio/"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={trackLanderClick}
-                  className="group flex items-center gap-1.5"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img alt="Lander Studio" src="/Lander_black.png" className="h-[13.6px] w-[10.7px]" />
-                  <span className="text-base font-medium tracking-[-0.03em] text-[#09090b] group-hover:underline">
-                    Lander Studio
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setCreatorsOpen((o) => !o)}
+                className={`flex w-full cursor-pointer items-center justify-between rounded-[10px] border py-2 transition-all duration-200 ${
+                  creatorsOpen
+                    ? "border-[#e7e9ee] bg-white px-2 shadow-[0px_0.98px_1.96px_0px_rgba(44,43,79,0.05),0px_1.42px_3.42px_0px_rgba(44,43,79,0.04)]"
+                    : "border-transparent px-0 hover:border-[#e7e9ee] hover:bg-white hover:px-2 hover:shadow-[0px_0.98px_1.96px_0px_rgba(44,43,79,0.05),0px_1.42px_3.42px_0px_rgba(44,43,79,0.04)]"
+                }`}
+              >
+                <div className="flex min-w-0 items-center gap-2.5">
+                  {selectedCreator ? (
+                    <span className="flex size-[30px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#ebebef] text-xs font-medium text-[#09090b]">
+                      {selectedCreator.avatar_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          alt=""
+                          src={selectedCreator.avatar_url}
+                          referrerPolicy="no-referrer"
+                          className="size-full object-cover"
+                        />
+                      ) : (
+                        (selectedCreator.full_name ?? selectedCreator.username)
+                          .charAt(0)
+                          .toUpperCase()
+                      )}
+                    </span>
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img alt="" src="/creators.svg" className="size-[30px] shrink-0" />
+                  )}
+                  <span className="truncate text-[18px] leading-none tracking-[-0.03em] text-[#09090b]">
+                    {selectedCreator
+                      ? (selectedCreator.full_name ?? selectedCreator.username)
+                      : "All Creators"}
                   </span>
-                </a>
-              </div>
+                </div>
+                <ChevronsUpDown size={18} strokeWidth={1.5} className="shrink-0 text-[#71717b]" />
+              </button>
+
+              {creatorsOpen && (
+                <>
+                  {/* click-away */}
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setCreatorsOpen(false)}
+                  />
+                  <div className="absolute inset-x-0 top-full z-50 mt-1 flex flex-col overflow-hidden rounded-[14px] border border-[#e7e9ee] bg-white shadow-[0px_10px_5px_rgba(0,0,0,0.04),0px_2px_2.5px_rgba(0,0,0,0.04)]">
+                    {/* Search */}
+                    <div className="flex items-center gap-2 border-b border-[#e7e9ee] p-2.5">
+                      <Search size={18} strokeWidth={1.5} className="shrink-0 text-[#71717b]" />
+                      <input
+                        value={creatorQuery}
+                        onChange={(e) => setCreatorQuery(e.target.value)}
+                        placeholder="Search creators"
+                        className="w-full bg-transparent text-base tracking-[-0.03em] text-black outline-none placeholder:text-[#71717b]"
+                      />
+                    </div>
+
+                    {/* List — max 4 rows visible, scroll the rest. Edge fade. */}
+                    <ScrollFadeEffect className="max-h-[192px]">
+                        {/* All Creators — always on top; clears the selection.
+                            Active (dark gray) when no creator is selected. */}
+                        <button
+                          type="button"
+                          onClick={() => pickCreator(null)}
+                          className={`flex w-full cursor-pointer items-center gap-2 p-2.5 transition-colors ${
+                            selectedCreator ? "hover:bg-[#f2f2f2]" : "bg-[#e4e4e7]"
+                          }`}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img alt="" src="/creators.svg" className="size-7 shrink-0" />
+                          <span className="text-base tracking-[-0.03em] text-black">
+                            All Creators
+                          </span>
+                        </button>
+                        {/* Shimmer while the list loads. */}
+                        {!creatorsLoaded &&
+                          Array.from({ length: 4 }).map((_, i) => (
+                            <div
+                              key={`sk-${i}`}
+                              className="flex w-full items-center justify-between p-2.5"
+                            >
+                              <span className="flex items-center gap-2">
+                                <span className="skeleton-shimmer size-7 shrink-0 rounded-md" />
+                                <span className="skeleton-shimmer h-4 w-28 rounded-md" />
+                              </span>
+                              <span className="skeleton-shimmer h-[22px] w-[37px] shrink-0 rounded-md" />
+                            </div>
+                          ))}
+                        {creatorsLoaded && filteredCreators.length === 0 && (
+                          <p className="p-2.5 text-sm tracking-[-0.03em] text-[#a1a1aa]">
+                            No creators found.
+                          </p>
+                        )}
+                        {filteredCreators.map((c) => {
+                          const active = c.username === selectedCreator?.username;
+                          return (
+                          <button
+                            key={c.username}
+                            type="button"
+                            onClick={() => pickCreator(c)}
+                            className={`group flex w-full cursor-pointer items-center justify-between p-2.5 transition-colors ${
+                              active ? "bg-[#e4e4e7]" : "hover:bg-[#f2f2f2]"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <span className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[#ebebef] text-xs font-medium text-[#09090b]">
+                                {c.avatar_url ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    alt=""
+                                    src={c.avatar_url}
+                                    referrerPolicy="no-referrer"
+                                    className="size-full object-cover"
+                                  />
+                                ) : (
+                                  (c.full_name ?? c.username).charAt(0).toUpperCase()
+                                )}
+                              </span>
+                              <span className="text-base tracking-[-0.03em] text-black">
+                                {c.full_name ?? c.username}
+                              </span>
+                            </span>
+                            <span className="flex h-[22px] w-[37px] shrink-0 items-center justify-center rounded-md bg-[#f7f7f7] text-xs font-medium tracking-[-0.03em] text-[#71717b] transition-colors group-hover:bg-white">
+                              {c.count}
+                            </span>
+                          </button>
+                          );
+                        })}
+                    </ScrollFadeEffect>
+
+                    {/* Footer — approved creators get an "Open Creator Portal"
+                        link to their own page; a pending applicant sees nothing;
+                        everyone else gets the Become-a-Creator action. */}
+                    {myUsername ? (
+                      <div className="flex items-center border-t border-[#e7e9ee] p-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCreatorsOpen(false);
+                            router.push(`/creators/${myUsername}`);
+                          }}
+                          className="flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-[#ebebeb] bg-white px-2.5 py-1.5 shadow-[0px_1px_1px_rgba(10,13,20,0.03)] transition-colors hover:bg-[#fafafa]"
+                        >
+                          <ExternalLink size={16} strokeWidth={1.5} className="text-[#71717b]" />
+                          <span className="text-base tracking-[-0.03em] text-[#71717b]">
+                            Open Creator Portal
+                          </span>
+                        </button>
+                      </div>
+                    ) : hasPendingApplication ? null : (
+                      <div className="flex items-center border-t border-[#e7e9ee] p-2">
+                        <button
+                          type="button"
+                          onClick={becomeCreator}
+                          className="flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-[#ebebeb] bg-white px-2.5 py-1.5 shadow-[0px_1px_1px_rgba(10,13,20,0.03)] transition-colors hover:bg-[#fafafa]"
+                        >
+                          <CirclePlus size={16} strokeWidth={1.5} className="text-[#71717b]" />
+                          <span className="text-base tracking-[-0.03em] text-[#71717b]">
+                            Become a Creator
+                          </span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
+            {selectedCreator ? (
+              <p className="text-base tracking-[-0.03em] text-[#71717b]">
+                {selectedCreator.bio ? selectedCreator.bio : "No bio added"}
+              </p>
+            ) : (
+              <div className="flex flex-col gap-0.5">
+                <p className="text-base tracking-[-0.03em] text-[#71717b]">
+                  Blocks is a growing library of design
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-base tracking-[-0.03em] text-[#71717b]">
+                    resources created by
+                  </p>
+                  <a
+                    href="https://lander.studio/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={trackLanderClick}
+                    className="group flex items-center gap-1.5"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img alt="Lander Studio" src="/Lander_black.png" className="h-[13.6px] w-[10.7px]" />
+                    <span className="text-base font-medium tracking-[-0.03em] text-[#09090b] group-hover:underline">
+                      Lander Studio
+                    </span>
+                  </a>
+                </div>
+              </div>
+            )}
           </div>
 
           {sections.map((s) => (

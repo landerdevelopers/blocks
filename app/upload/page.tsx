@@ -2,9 +2,14 @@
 
 import { useState } from "react";
 import UploadForm from "@/components/UploadForm";
+import { useAuthStore } from "@/store/authStore";
 
 export default function UploadPage() {
   const [uploaded, setUploaded] = useState(false);
+  // Admins publish curated gallery content; everyone else here is a creator
+  // (middleware only lets admins + creators in) → submit as a pending review.
+  const isAdmin = useAuthStore((s) => s.isAdmin);
+  const ownerMode = !isAdmin;
 
   if (uploaded) {
     return (
@@ -38,7 +43,18 @@ export default function UploadPage() {
   return (
     <main className="flex min-h-screen justify-center bg-[#f5f5f5] px-4 py-10 font-sans">
       {/* key remounts the form for a clean slate after "Upload Another". */}
-      <UploadForm key="upload" onSuccess={() => setUploaded(true)} />
+      <UploadForm
+        key="upload"
+        ownerMode={ownerMode}
+        heading={ownerMode ? "Publish New Design" : undefined}
+        subheading={
+          ownerMode
+            ? "Submit your design for review. Approved designs go live."
+            : undefined
+        }
+        submitLabel={ownerMode ? "Submit for Review" : undefined}
+        onSuccess={() => setUploaded(true)}
+      />
     </main>
   );
 }

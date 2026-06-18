@@ -203,7 +203,8 @@ export type SavedComponent = {
   section: string | null;
   filters: string[] | null;
   figma_url: string | null;
-  figma_data: string | null;
+  // Not returned after insert/update (excluded from the SELECT grant).
+  figma_data?: string | null;
   preview_url: string | null;
   aspect_ratio: number | null;
   colors: { hex: string; pct: number | null }[] | null;
@@ -249,6 +250,7 @@ export default function UploadForm({
   subheading = "Customize layout assets, Figma data, and color weights.",
   submitLabel = "Upload Component",
   onSuccess,
+  ownerMode = false,
 }: {
   initialValues?: UploadInitialValues;
   componentId?: string;
@@ -256,6 +258,9 @@ export default function UploadForm({
   subheading?: string;
   submitLabel?: string;
   onSuccess?: (component: SavedComponent) => void;
+  // Creator publishing: insert as a pending, unpublished submission owned by the
+  // current user (vs. the admin path which publishes an approved component).
+  ownerMode?: boolean;
 }) {
   const supabase = createClient();
   const profile = useAuthStore((s) => s.profile);
@@ -285,9 +290,6 @@ export default function UploadForm({
         hex: c.hex,
         weight: c.pct ?? null,
       })),
-  );
-  const [featured, setFeatured] = useState<boolean>(
-    initialValues?.featured ?? false,
   );
   const [pickerOpen, setPickerOpen] = useState(false);
   const [figmaData, setFigmaData] = useState<string | null>(
@@ -453,17 +455,32 @@ export default function UploadForm({
         aspect_ratio,
         colors: dbColors,
         colors_hsl,
-        // Logos have no pinned row — never store them as featured.
-        featured: category === "Logo" ? false : featured,
+        // Pinning to top is done via the up-arrow on the gallery/creator page,
+        // not at upload time.
+        featured: false,
       };
 
       const query = componentId
         ? supabase.from("components").update(payload).eq("id", componentId)
-        : supabase
-            .from("components")
-            .insert({ ...payload, uploaded_by: profile?.id ?? null });
+        : supabase.from("components").insert({
+            ...payload,
+            uploaded_by: profile?.id ?? null,
+            // Creators submit for review (pending, unpublished); admins publish
+            // an approved component straight to the live gallery.
+            status: ownerMode ? "pending" : "approved",
+            is_published: ownerMode ? false : true,
+          });
 
-      const { data, error: dbErr } = await query.select().single();
+      // Return only grant-readable columns — a bare .select() does RETURNING *,
+      // which includes figma_data (excluded from the column grant) and fails
+      // with "permission denied for table components". status/is_private are
+      // also omitted (the client doesn't need them, and they live in a separate
+      // grant block) so the read-back never trips a column-privilege denial.
+      const { data, error: dbErr } = await query
+        .select(
+          "id, category, section, filters, figma_url, preview_url, aspect_ratio, colors, colors_hsl, featured, featured_at, is_published, created_at, copy_count, uploaded_by",
+        )
+        .single();
       setSaving(false);
       if (dbErr) {
         setError(dbErr.message);
@@ -473,8 +490,9 @@ export default function UploadForm({
         setExistingPreview(data.preview_url);
         setExistingAspect((data as SavedComponent).aspect_ratio ?? null);
       }
-      // New uploads prepend to the shared gallery list — instant homepage update.
-      if (!componentId && data) {
+      // New uploads prepend to the shared gallery list — instant homepage
+      // update. Creator submissions are pending (not live), so they're skipped.
+      if (!componentId && !ownerMode && data) {
         const c = data as SavedComponent;
         addComponent({
           id: c.id,
@@ -745,35 +763,6 @@ export default function UploadForm({
           </button>
         </div>
       </div>
-      )}
-
-      {/* Show on top — not applicable to logos (no pinned row in that view). */}
-      {category !== "Logo" && (
-        <div className="mt-6 flex items-center justify-between rounded-xl border border-[#e7e9ee] bg-white px-3 py-3">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium tracking-[-0.03em] text-[#09090b]">
-              Show on top
-            </span>
-            <span className="text-xs tracking-[-0.03em] text-[#71717b]">
-              Pin this component to the top of the gallery.
-            </span>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={featured}
-            onClick={() => setFeatured((v) => !v)}
-            className={`relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors ${
-              featured ? "bg-[#09090b]" : "bg-[#e4e4e7]"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow-sm transition-transform ${
-                featured ? "translate-x-5" : "translate-x-0"
-              }`}
-            />
-          </button>
-        </div>
       )}
 
       {error && (

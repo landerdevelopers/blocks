@@ -52,30 +52,12 @@ export default async function AnalyticsPage({
 
   const admin = createAdminClient();
 
-  // Stats for a [start, end] IST day window. Four parallel queries: copies
-  // (count + user_ids for unique), logins (same), new accounts (count), and
-  // copies-by-category (DB aggregation RPC — no raw rows pulled to JS).
+  // Stats for a [start, end] IST day window. All aggregation happens in the DB
+  // (no raw rows pulled to JS): get_window_stats returns the KPI counts incl.
+  // DISTINCT uniques, and get_copies_by_category returns the per-category totals.
   const statsFor = async (start: string, end: string): Promise<Stats> => {
-    const createdFrom = `${start}T00:00:00+05:30`;
-    const createdTo = `${addDays(end, 1)}T00:00:00+05:30`;
-    const [copyRes, loginRes, acctRes, catRes] = await Promise.all([
-      admin
-        .from("copy_events")
-        .select("user_id", { count: "exact" })
-        .gte("date", start)
-        .lte("date", end)
-        .limit(100000),
-      admin
-        .from("login_events")
-        .select("user_id", { count: "exact" })
-        .gte("date", start)
-        .lte("date", end)
-        .limit(100000),
-      admin
-        .from("profiles")
-        .select("*", { count: "exact", head: true })
-        .gte("created_at", createdFrom)
-        .lt("created_at", createdTo),
+    const [statRes, catRes] = await Promise.all([
+      admin.rpc("get_window_stats", { start_date: start, end_date: end }),
       admin.rpc("get_copies_by_category", {
         start_date: start,
         end_date: end,
@@ -89,12 +71,23 @@ export default async function AnalyticsPage({
       | null) ?? []) {
       if (r.category in byCategory) byCategory[r.category] = Number(r.copies_count);
     }
+    const s = (
+      statRes.data as
+        | {
+            total_copies: number;
+            unique_copiers: number;
+            total_logins: number;
+            unique_logins: number;
+            new_accounts: number;
+          }[]
+        | null
+    )?.[0];
     return {
-      totalCopies: copyRes.count ?? 0,
-      uniqueCopiers: new Set((copyRes.data ?? []).map((r) => r.user_id)).size,
-      totalLogins: loginRes.count ?? 0,
-      uniqueLogins: new Set((loginRes.data ?? []).map((r) => r.user_id)).size,
-      newAccounts: acctRes.count ?? 0,
+      totalCopies: Number(s?.total_copies ?? 0),
+      uniqueCopiers: Number(s?.unique_copiers ?? 0),
+      totalLogins: Number(s?.total_logins ?? 0),
+      uniqueLogins: Number(s?.unique_logins ?? 0),
+      newAccounts: Number(s?.new_accounts ?? 0),
       byCategory,
     };
   };
@@ -113,19 +106,18 @@ export default async function AnalyticsPage({
     }));
   };
 
-  // Emails from auth.users — paginate so >1000 accounts are fully covered.
-  const fetchAllEmails = async (): Promise<Record<string, string>> => {
+  // Emails from auth.users — fetched only for the users actually shown in the
+  // per-user table (scales with daily-active users, not total accounts).
+  const fetchEmailsFor = async (
+    uids: string[],
+  ): Promise<Record<string, string>> => {
     const map: Record<string, string> = {};
-    let page = 1;
-    for (;;) {
-      const { data } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
-      if (!data?.users?.length) break;
-      data.users.forEach((u) => {
-        map[u.id] = u.email || "";
-      });
-      if (data.users.length < 1000) break;
-      page++;
-    }
+    await Promise.all(
+      uids.map(async (id) => {
+        const { data } = await admin.auth.admin.getUserById(id);
+        if (data?.user) map[id] = data.user.email || "";
+      }),
+    );
     return map;
   };
 
@@ -140,8 +132,6 @@ export default async function AnalyticsPage({
     landerRes,
     rawToday,
     rawDate,
-    namesRes,
-    emailMap,
   ] = await Promise.all([
     statsFor(today, today),
     statsFor(start7, today),
@@ -156,19 +146,10 @@ export default async function AnalyticsPage({
     admin.from("lander_clicks").select("*", { count: "exact", head: true }),
     perUserFor(today),
     datePick ? perUserFor(datePick) : Promise.resolve(null),
-    admin.from("profiles").select("id, full_name").limit(10000),
-    fetchAllEmails(),
   ]);
 
-  const nameMap = new Map<string, string>(
-    (namesRes.data ?? []).map((p) => [
-      p.id as string,
-      (p.full_name as string) ?? "—",
-    ]),
-  );
-
-  // Latest login per active user (union of today + date views) — second wave,
-  // since it depends on which user ids the per-user RPCs returned.
+  // Second wave — names/emails/last-login only for the users actually shown in
+  // the per-user table (union of today + date views). Scales with active users.
   const allUids = [
     ...new Set([
       ...rawToday.map((r) => r.uid),
@@ -176,16 +157,26 @@ export default async function AnalyticsPage({
     ]),
   ];
   const lastLoginMap: Record<string, string> = {};
+  const nameMap = new Map<string, string>();
+  let emailMap: Record<string, string> = {};
   if (allUids.length) {
-    const { data: logins } = await admin
-      .from("login_events")
-      .select("user_id, logged_in_at")
-      .in("user_id", allUids)
-      .order("logged_in_at", { ascending: false });
+    const [{ data: logins }, { data: names }, emails] = await Promise.all([
+      admin
+        .from("login_events")
+        .select("user_id, logged_in_at")
+        .in("user_id", allUids)
+        .order("logged_in_at", { ascending: false }),
+      admin.from("profiles").select("id, full_name").in("id", allUids),
+      fetchEmailsFor(allUids),
+    ]);
     for (const l of logins ?? []) {
       const uid = l.user_id as string;
       if (!lastLoginMap[uid]) lastLoginMap[uid] = l.logged_in_at as string;
     }
+    for (const p of names ?? []) {
+      nameMap.set(p.id as string, (p.full_name as string) ?? "—");
+    }
+    emailMap = emails;
   }
 
   const enrich = (rows: RawPerUser[]): PerUserRow[] =>

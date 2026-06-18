@@ -42,12 +42,30 @@ export async function middleware(request: NextRequest) {
     .eq("id", user.id)
     .single();
 
-  if (profile?.role !== "admin") return home;
+  const role = profile?.role;
+  const path = request.nextUrl.pathname;
+  // /upload and /creators are open to admins and creators; everything else
+  // (/analytics, /admin) is admin-only.
+  const allowed =
+    role === "admin" ||
+    (role === "creator" &&
+      (path.startsWith("/upload") || path.startsWith("/creators")));
+
+  if (!allowed) return home;
 
   return response;
 }
 
 // Only run on the admin-gated routes.
 export const config = {
-  matcher: ["/upload", "/upload/:path*", "/analytics", "/analytics/:path*"],
+  matcher: [
+    "/upload",
+    "/upload/:path*",
+    "/analytics",
+    "/analytics/:path*",
+    "/admin",
+    "/admin/:path*",
+    "/creators",
+    "/creators/:path*",
+  ],
 };

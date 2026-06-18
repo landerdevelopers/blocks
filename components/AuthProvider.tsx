@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type Profile } from "@/store/authStore";
 import { todayIST } from "@/lib/ist";
 import OnboardingModal from "./OnboardingModal";
+import CreatorUsernameModal from "./CreatorUsernameModal";
 
 export default function AuthProvider({
   children,
@@ -16,6 +17,47 @@ export default function AuthProvider({
   const setAuthLoading = useAuthStore((s) => s.setAuthLoading);
   const setShowOnboarding = useAuthStore((s) => s.setShowOnboarding);
   const showOnboarding = useAuthStore((s) => s.showOnboarding);
+  const profile = useAuthStore((s) => s.profile);
+  const setPendingCreatorApp = useAuthStore((s) => s.setPendingCreatorApp);
+
+  // Approved creators who haven't picked a handle yet get the forced username
+  // modal — but only after name onboarding (if any) is done. The signal is an
+  // APPROVED application + no handle, not the role: a normal approval flips role
+  // to 'creator' (covered synchronously below), but an approved ADMIN keeps
+  // role 'admin' (we never demote admins), so we confirm their approved
+  // application asynchronously. The `baseNeeds` guard means once they pick a
+  // handle (creator_onboarded → true), the modal closes regardless of the
+  // async flag, so no reset is needed.
+  const baseNeeds =
+    !showOnboarding &&
+    !!profile &&
+    !profile.creator_onboarded &&
+    !profile.username;
+
+  // Normal approved creators — known from the role alone, no query needed.
+  const directNeeds = baseNeeds && profile?.role === "creator";
+
+  // Admins who applied and got approved — verified via an approved application.
+  const [adminApproved, setAdminApproved] = useState(false);
+  useEffect(() => {
+    if (!baseNeeds || profile?.role !== "admin" || !profile?.id) return;
+    let active = true;
+    createClient()
+      .from("creator_applications")
+      .select("id")
+      .eq("user_id", profile.id)
+      .eq("status", "approved")
+      .limit(1)
+      .then(({ data }) => {
+        if (active) setAdminApproved(!!data?.length);
+      });
+    return () => {
+      active = false;
+    };
+  }, [baseNeeds, profile?.role, profile?.id]);
+
+  const needsCreatorUsername =
+    directNeeds || (baseNeeds && profile?.role === "admin" && adminApproved);
 
   useEffect(() => {
     const supabase = createClient();
@@ -58,6 +100,15 @@ export default function AuthProvider({
       if (session?.user) {
         setEmail(session.user.email ?? null);
         loadProfile(session.user.id);
+        // Prefetch the pending-application flag so the "Become a Creator" CTA
+        // (account modal + sidebar) renders instantly, not 1-2s after open.
+        supabase
+          .from("creator_applications")
+          .select("id")
+          .eq("user_id", session.user.id)
+          .eq("status", "pending")
+          .limit(1)
+          .then(({ data }) => setPendingCreatorApp(!!data?.length));
         // Log a login on an actual sign-in (not INITIAL_SESSION / refresh).
         // Fire-and-forget — analytics-only, must never block auth. Upsert with
         // ignoreDuplicates → at most one row per user per IST day (dedup via the
@@ -76,16 +127,24 @@ export default function AuthProvider({
         // after a successful submit.
         setProfile(null);
         setEmail(null);
+        setPendingCreatorApp(null);
       }
     });
 
     return () => sub.subscription.unsubscribe();
-  }, [setProfile, setEmail, setAuthLoading, setShowOnboarding]);
+  }, [
+    setProfile,
+    setEmail,
+    setAuthLoading,
+    setShowOnboarding,
+    setPendingCreatorApp,
+  ]);
 
   return (
     <>
       {children}
       {showOnboarding && <OnboardingModal />}
+      {needsCreatorUsername && <CreatorUsernameModal />}
     </>
   );
 }

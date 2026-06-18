@@ -87,6 +87,7 @@ export default function Gallery({
   onCopy,
   category = null,
   filters = [],
+  creatorId = null,
   colorSearchActive = false,
   colorSearchLoading = false,
   colorSearchResults = null,
@@ -101,6 +102,9 @@ export default function Gallery({
   ) => Promise<{ allowed: boolean; figmaData: string | null }>;
   category?: string | null;
   filters?: string[];
+  // When set, the gallery shows ONLY this creator's published designs (across
+  // all categories). Selected from the sidebar "All Creators" popup.
+  creatorId?: string | null;
   colorSearchActive?: boolean;
   colorSearchLoading?: boolean;
   colorSearchResults?: Component[] | null;
@@ -161,25 +165,38 @@ export default function Gallery({
       setIsFetchingMore(page > 0);
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
-      const dbCat = category ? CAT_MAP[category] : null;
+      // Creator view ignores the category — it shows everything that creator
+      // published. The cache is keyed per-creator so it never collides with the
+      // category caches.
+      const dbCat = creatorId ? null : category ? CAT_MAP[category] : null;
+      const cacheKey = creatorId ? `creator:${creatorId}` : category ?? "website";
       let query = createClient()
         .from("components")
         .select(
           "id, category, section, filters, figma_url, preview_url, aspect_ratio, colors, featured, featured_at",
         )
         .eq("is_published", true);
-      if (dbCat) query = query.eq("category", dbCat);
+      if (creatorId) query = query.eq("uploaded_by", creatorId);
+      else if (dbCat) query = query.eq("category", dbCat);
       // Logos paginate ALPHABETICALLY by letter (stored in `filters`) so each
       // 24-batch fills letters top-down A→Z; within a letter, pinned-first.
       // Other categories: pinned-first, then newest.
       if (dbCat === "Logos") {
         query = query.order("filters", { ascending: true });
       }
-      const { data, error } = await query
-        .order("featured", { ascending: false })
-        .order("featured_at", { ascending: false, nullsFirst: false })
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      // Creator view follows the creator's manual arrangement (creator_pinned_at);
+      // category views use the global featured pinning.
+      if (creatorId) {
+        query = query
+          .order("creator_pinned_at", { ascending: false, nullsFirst: false })
+          .order("created_at", { ascending: false });
+      } else {
+        query = query
+          .order("featured", { ascending: false })
+          .order("featured_at", { ascending: false, nullsFirst: false })
+          .order("created_at", { ascending: false });
+      }
+      const { data, error } = await query.range(from, to);
       if (error) {
         console.error("[gallery] fetchPage:", error.message);
         setIsFetching(false);
@@ -191,14 +208,14 @@ export default function Gallery({
       if (fresh.length < PAGE_SIZE) setHasMore(false);
       if (page === 0) {
         setComponents(fresh);
-        // Cache page 0 under THIS page's own category (stable closure value) —
-        // not a global — so overlapping fetches across switches never mis-key.
+        // Cache page 0 under THIS view's own key (category slug, or creator:<id>)
+        // — not a global — so overlapping fetches across switches never mis-key.
         // Pass the known total so the cache can drive skeleton slots on refresh.
-        const dbCat = category ? CAT_MAP[category] : null;
-        const total = dbCat
-          ? useAuthStore.getState().categoryCounts[dbCat]
-          : undefined;
-        writeComponentsCache(category ?? "website", fresh, total);
+        const total =
+          !creatorId && dbCat
+            ? useAuthStore.getState().categoryCounts[dbCat]
+            : undefined;
+        writeComponentsCache(cacheKey, fresh, total);
       } else {
         appendComponents(fresh);
       }
@@ -215,6 +232,7 @@ export default function Gallery({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       category,
+      creatorId,
       setComponents,
       appendComponents,
       setHasMore,
@@ -229,13 +247,16 @@ export default function Gallery({
   // clear to skeletons, flip the filter category, and fetch page 0.
   useEffect(() => {
     const cat = category ?? "website";
+    const cacheKey = creatorId ? `creator:${creatorId}` : cat;
     setCurrentCategory(cat);
     setHasMore(true);
     setCurrentPage(0);
-    const cached = readComponentsCache(cat);
+    const cached = readComponentsCache(cacheKey);
     if (cached) {
-      setComponents(cached.data); // instant display from this category's cache
-      if (cached.total) setCategoryCounts({ [CAT_MAP[cat]]: cached.total });
+      setComponents(cached.data); // instant display from this view's cache
+      // Only category caches carry a category count to seed; creator caches don't.
+      if (!creatorId && cached.total)
+        setCategoryCounts({ [CAT_MAP[cat]]: cached.total });
     } else {
       clearComponents(); // empty + loaded=false → skeletons, never stale data
     }
@@ -245,7 +266,7 @@ export default function Gallery({
     fetchingPageRef.current = false;
     fetchPage(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category]);
+  }, [category, creatorId]);
 
   // Reset scroll to the top on every category switch. Runs in a LAYOUT effect
   // keyed on the rendered category so it fires AFTER the new content commits —
@@ -306,10 +327,14 @@ export default function Gallery({
   useEffect(() => setMounted(true), []);
 
   const dbCategory = displayCategory ? CAT_MAP[displayCategory] : null;
-  const isLogos = dbCategory === "Logos";
+  // Creator view shows a creator's mixed-category designs in the masonry grid —
+  // never the per-letter logos layout.
+  const isLogos = dbCategory === "Logos" && !creatorId;
 
-  // Apply category + filter selection.
+  // Apply category + filter selection. Skipped entirely in creator view — the
+  // fetch is already scoped to that creator, across all categories.
   const filtered = useMemo(() => {
+    if (creatorId) return components;
     return components.filter((c) => {
       if (dbCategory && c.category !== dbCategory) return false;
       if (filters.length) {
@@ -335,7 +360,7 @@ export default function Gallery({
       }
       return true;
     });
-  }, [components, dbCategory, filters]);
+  }, [components, dbCategory, filters, creatorId]);
 
   // Skeleton modes. initial = first load / switch to an uncached category (no
   // data yet) → varying-height skeletons. load-more = a page > 0 fetch in
@@ -1184,7 +1209,10 @@ export default function Gallery({
     // at 2 pages). Shown even when idle so the grid always reflects the real
     // total; each placeholder is replaced by a card as pages stream in.
     const cachedLen = filtered.length;
-    const totalCount = dbCategory ? categoryCounts[dbCategory] || 0 : 0;
+    // Creator view has no per-category total to project skeletons from — rely on
+    // the load-more fallback + sentinel instead.
+    const totalCount =
+      !creatorId && dbCategory ? categoryCounts[dbCategory] || 0 : 0;
     let remaining = hasMore
       ? Math.min(PAGE_SIZE, Math.max(0, totalCount - cachedLen))
       : 0;

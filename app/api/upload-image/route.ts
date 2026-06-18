@@ -2,8 +2,9 @@ import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
 // Returns a one-time Cloudflare direct-creator-upload URL so the browser can
-// POST the image straight to Cloudflare (no server hop). Admin-only; the token
-// stays server-only here.
+// POST the image straight to Cloudflare (no server hop). Admins and creators
+// may upload (creators publish via the moderation flow); the token stays
+// server-only here.
 export async function GET() {
   const cookieStore = await cookies();
   const supabase = createServerClient(
@@ -22,7 +23,7 @@ export async function GET() {
     .select("role")
     .eq("id", user.id)
     .single();
-  if (profile?.role !== "admin")
+  if (profile?.role !== "admin" && profile?.role !== "creator")
     return Response.json({ error: "Forbidden" }, { status: 403 });
 
   const res = await fetch(
