@@ -96,7 +96,7 @@ export async function POST(request: Request) {
               When you open Blocks, we'll ask you to pick a unique username — that's the last step before you start publishing.
             </p>
             <a href="${siteUrl}" style="display:inline-block;background:#2974ff;color:#ffffff;font-size:15px;font-weight:500;text-decoration:none;padding:12px 22px;border-radius:10px;letter-spacing:-0.01em">
-              Open Blocks;
+              Open Blocks
             </a>
             <p style="font-size:13px;color:#a1a1aa;margin:28px 0 0">Blocks by Lander Studio</p>
           </div>
