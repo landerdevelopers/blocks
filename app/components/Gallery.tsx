@@ -102,8 +102,9 @@ export default function Gallery({
   ) => Promise<{ allowed: boolean; figmaData: string | null }>;
   category?: string | null;
   filters?: string[];
-  // When set, the gallery shows ONLY this creator's published designs (across
-  // all categories). Selected from the sidebar "All Creators" popup.
+  // When set, the gallery shows ONLY this creator's published designs, still
+  // scoped to the active category (their logos show under Logos, etc.). Selected
+  // from the sidebar "All Creators" popup.
   creatorId?: string | null;
   colorSearchActive?: boolean;
   colorSearchLoading?: boolean;
@@ -165,11 +166,13 @@ export default function Gallery({
       setIsFetchingMore(page > 0);
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
-      // Creator view ignores the category — it shows everything that creator
-      // published. The cache is keyed per-creator so it never collides with the
-      // category caches.
-      const dbCat = creatorId ? null : category ? CAT_MAP[category] : null;
-      const cacheKey = creatorId ? `creator:${creatorId}` : category ?? "website";
+      // Creator view is ALSO category-scoped: a creator's designs only appear in
+      // the category they belong to (e.g. their logos show only under Logos). The
+      // cache is keyed per-creator-AND-category so it never collides.
+      const dbCat = category ? CAT_MAP[category] : null;
+      const cacheKey = creatorId
+        ? `creator:${creatorId}:${category ?? "website"}`
+        : category ?? "website";
       let query = createClient()
         .from("components")
         .select(
@@ -177,20 +180,18 @@ export default function Gallery({
         )
         .eq("is_published", true);
       if (creatorId) query = query.eq("uploaded_by", creatorId);
-      else if (dbCat) query = query.eq("category", dbCat);
-      // Logos paginate ALPHABETICALLY by letter (stored in `filters`) so each
-      // 24-batch fills letters top-down A→Z; within a letter, pinned-first.
-      // Other categories: pinned-first, then newest.
-      if (dbCat === "Logos") {
-        query = query.order("filters", { ascending: true });
-      }
-      // Creator view follows the creator's manual arrangement (creator_pinned_at);
-      // category views use the global featured pinning.
+      if (dbCat) query = query.eq("category", dbCat);
+      // Creator view follows the creator's manual arrangement (creator_pinned_at),
+      // then newest. Category views: logos paginate ALPHABETICALLY by letter
+      // (stored in `filters`) so each batch fills A→Z; others pinned-first, newest.
       if (creatorId) {
         query = query
           .order("creator_pinned_at", { ascending: false, nullsFirst: false })
           .order("created_at", { ascending: false });
       } else {
+        if (dbCat === "Logos") {
+          query = query.order("filters", { ascending: true });
+        }
         query = query
           .order("featured", { ascending: false })
           .order("featured_at", { ascending: false, nullsFirst: false })
@@ -247,7 +248,7 @@ export default function Gallery({
   // clear to skeletons, flip the filter category, and fetch page 0.
   useEffect(() => {
     const cat = category ?? "website";
-    const cacheKey = creatorId ? `creator:${creatorId}` : cat;
+    const cacheKey = creatorId ? `creator:${creatorId}:${cat}` : cat;
     setCurrentCategory(cat);
     setHasMore(true);
     setCurrentPage(0);
@@ -327,14 +328,14 @@ export default function Gallery({
   useEffect(() => setMounted(true), []);
 
   const dbCategory = displayCategory ? CAT_MAP[displayCategory] : null;
-  // Creator view shows a creator's mixed-category designs in the masonry grid —
-  // never the per-letter logos layout.
-  const isLogos = dbCategory === "Logos" && !creatorId;
+  // Logos always use the per-letter layout — including in creator view, so a
+  // creator's logos render exactly like the main Logos category.
+  const isLogos = dbCategory === "Logos";
 
-  // Apply category + filter selection. Skipped entirely in creator view — the
-  // fetch is already scoped to that creator, across all categories.
+  // Apply category + filter selection. In creator view the fetch is already
+  // scoped to (creator, category), so the category check is a no-op there; the
+  // letter/section/theme chip filters still apply the same as a category view.
   const filtered = useMemo(() => {
-    if (creatorId) return components;
     return components.filter((c) => {
       if (dbCategory && c.category !== dbCategory) return false;
       if (filters.length) {

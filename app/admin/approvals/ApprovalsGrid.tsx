@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Calendar, Check, Clock, X } from "lucide-react";
-import { cloudflareThumb } from "@/lib/utils";
+import { cloudflareThumb, cloudflareLogo } from "@/lib/utils";
+import { Textarea } from "@/components/ui/textarea";
 
 export type PendingItem = {
   id: string;
@@ -18,6 +20,9 @@ export type PendingItem = {
   creatorName: string;
   creatorAvatar: string | null;
   creatorUsername: string | null;
+  // Figma clipboard HTML — admin-only (this route is admin-gated). Powers the
+  // "Copy to Figma" button so a reviewer can paste the actual block into Figma.
+  figmaData: string | null;
 };
 
 function fmtDate(iso: string): string {
@@ -46,20 +51,145 @@ function Card({
 }) {
   const themes = item.filters ?? [];
   const colors = item.colors ?? [];
+  const [copied, setCopied] = useState(false);
+  const copyLock = useRef(false);
+  const isLogos = item.category === "Logos";
+
+  // Button sizing matches the home gallery's 3-column layout (BTN[3]).
+  const C = { w: 155, h: 37, cw: 196, ch: 36, r: 12, img: 22, fs: 16 };
+  const pill =
+    "flex items-center justify-center whitespace-nowrap border font-medium tracking-[-0.03em] shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,transform] duration-300 ease-out";
+
+  // Write the Figma clipboard HTML so the reviewer can paste the real block into
+  // Figma. Admin-only route, so figma_data is available client-side here.
+  const copyToFigma = async () => {
+    if (!item.figmaData || copyLock.current) return;
+    copyLock.current = true;
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([item.figmaData], { type: "text/html" }),
+        }),
+      ]);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard blocked — no-op
+    } finally {
+      copyLock.current = false;
+    }
+  };
+
   return (
     <div className="mb-4 flex break-inside-avoid flex-col gap-1.5 rounded-[12px] border border-[#e7e9ee] bg-[#f5f5f5] p-1.5 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.06)]">
-      {/* Preview — natural height per image (aspect ratio preserved). */}
-      <div
-        className="w-full overflow-hidden rounded-[6px] border border-[#e7e9ee] bg-[#e4e4e7]"
-        style={{ aspectRatio: String(item.aspect_ratio || 16 / 10) }}
-      >
-        {item.preview_url && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            alt=""
-            src={cloudflareThumb(item.preview_url)}
-            className="h-full w-full object-cover"
-          />
+      {/* Preview. Logos render as a square, padded, contained card (matching
+          the gallery / creator pages); other categories keep the natural-height
+          object-cover thumbnail. Copy-to-Figma slides up from the bottom on
+          hover, exactly like the home gallery. */}
+      <div className="group relative overflow-hidden rounded-[6px]">
+        {isLogos ? (
+          <div
+            className="flex w-full items-center justify-center overflow-hidden rounded-[6px] border border-[#e7e9ee] bg-white p-12"
+            style={{ aspectRatio: "1 / 1" }}
+          >
+            {item.preview_url && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                alt=""
+                src={cloudflareLogo(item.preview_url)}
+                className="size-full object-contain"
+              />
+            )}
+          </div>
+        ) : (
+          <div
+            className="w-full overflow-hidden rounded-[6px] border border-[#e7e9ee] bg-[#e4e4e7]"
+            style={{ aspectRatio: String(item.aspect_ratio || 16 / 10) }}
+          >
+            {item.preview_url && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                alt=""
+                src={cloudflareThumb(item.preview_url)}
+                className="h-full w-full object-cover"
+              />
+            )}
+          </div>
+        )}
+        {item.figmaData && (
+          <>
+            {/* Hover gradient behind the button. */}
+            <span className="pointer-events-none absolute inset-x-0 bottom-0 z-5 h-24 bg-linear-to-t from-black/70 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+            {/* Copy button — hidden below the image (clipped by the wrapper's
+                overflow-hidden so it never shows over the details), rises into
+                place on hover. */}
+            <div
+              className={`pointer-events-none absolute bottom-6 left-1/2 z-10 -translate-x-1/2 transition-[opacity,translate] duration-300 ease-out ${
+                copied
+                  ? "translate-y-0 opacity-100"
+                  : "translate-y-[calc(100%+1.5rem)] opacity-0 group-hover:translate-y-0 group-hover:opacity-100"
+              }`}
+            >
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={copyToFigma}
+                  style={{
+                    width: C.w,
+                    height: C.h,
+                    borderRadius: C.r,
+                    fontSize: C.fs,
+                    transform: copied ? "translateY(14px)" : "translateY(0)",
+                    opacity: copied ? 0 : undefined,
+                  }}
+                  className={`${pill} gap-2 cursor-pointer hover:opacity-90 ${
+                    copied
+                      ? "pointer-events-none"
+                      : "group-hover:pointer-events-auto"
+                  } ${
+                    isLogos
+                      ? "border-black bg-black text-white"
+                      : "border-[#e7e9ee] bg-white text-[#09090b]"
+                  }`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    alt=""
+                    src="/figma.png"
+                    style={{ width: C.img, height: C.img }}
+                  />
+                  Copy to Figma
+                </button>
+
+                {/* Copied pill — rises up + in over the copy pill. */}
+                <div
+                  aria-hidden={!copied}
+                  style={{
+                    width: C.cw,
+                    height: C.ch,
+                    borderRadius: C.r,
+                    fontSize: C.fs,
+                    backgroundColor: "#deffd7",
+                    color: "#1C9A00",
+                    borderColor: "#BAFFAA",
+                    top: "50%",
+                    left: "50%",
+                    transform: `translate(-50%, ${copied ? "-50%" : "calc(-50% + 14px)"})`,
+                    opacity: copied ? 1 : 0,
+                  }}
+                  className={`${pill} absolute gap-2 pointer-events-none`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    alt=""
+                    src="/Tick.png"
+                    style={{ width: C.img, height: C.img }}
+                  />
+                  Copied Successfully!
+                </div>
+              </div>
+            </div>
+          </>
         )}
       </div>
 
@@ -210,6 +340,10 @@ export default function ApprovalsGrid({ items }: { items: PendingItem[] }) {
   // drop instantly before the server data re-fetches.
   const [removed, setRemoved] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
+  // Reject flow: the design id awaiting a rejection reason (null = modal closed)
+  // and the reason draft.
+  const [rejectId, setRejectId] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
 
   // Refresh the server data when the admin returns to the tab — picks up
   // designs a creator deleted while pending (admin can't realtime-subscribe to
@@ -226,12 +360,26 @@ export default function ApprovalsGrid({ items }: { items: PendingItem[] }) {
     };
   }, [router]);
 
-  const onReview = async (id: string, action: "approve" | "reject") => {
+  // Approve runs immediately; reject opens the reason modal first.
+  const onReview = (id: string, action: "approve" | "reject") => {
+    if (action === "reject") {
+      setReason("");
+      setRejectId(id);
+      return;
+    }
+    void doReview(id, "approve");
+  };
+
+  const doReview = async (
+    id: string,
+    action: "approve" | "reject",
+    rejectReason?: string,
+  ) => {
     setBusy(id);
     const res = await fetch("/api/component-review", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ componentId: id, action }),
+      body: JSON.stringify({ componentId: id, action, reason: rejectReason }),
     });
     setBusy(null);
     if (!res.ok) return;
@@ -241,26 +389,102 @@ export default function ApprovalsGrid({ items }: { items: PendingItem[] }) {
     router.refresh();
   };
 
+  const submitReject = async () => {
+    if (!rejectId || !reason.trim()) return;
+    const id = rejectId;
+    setRejectId(null);
+    await doReview(id, "reject", reason.trim());
+  };
+
   const pending = items.filter((i) => !removed.has(i.id));
+
+  // Rejection-reason modal (design: Figma node 135:371).
+  const rejectModal =
+    rejectId && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            onClick={() => setRejectId(null)}
+            className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="relative flex w-[445px] max-w-full flex-col gap-5 rounded-[20px] bg-white p-6 shadow-[0px_0px_0px_1px_rgba(51,51,51,0.04),0px_5px_5px_-2.5px_rgba(51,51,51,0.08),0px_1px_3px_-1.5px_rgba(51,51,51,0.16)]"
+            >
+              {/* Heading + close */}
+              <div className="flex flex-col gap-1">
+                <div className="flex items-start justify-between">
+                  <h2 className="text-[16px] font-medium tracking-[-0.03em] text-[#09090b]">
+                    Why are you rejecting this block?
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setRejectId(null)}
+                    aria-label="Close"
+                    className="cursor-pointer text-[#71717b] transition-colors hover:text-[#09090b]"
+                  >
+                    <X size={18} strokeWidth={1.75} />
+                  </button>
+                </div>
+                <p className="text-[14px] tracking-[-0.03em] text-[#71717b]">
+                  Let the creator know what should be updated before approval.
+                </p>
+              </div>
+
+              <Textarea
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                autoFocus
+                placeholder="Tell the creator what needs to be improved…"
+                className="h-[88px] resize-none rounded-[12px] text-[14px] tracking-[-0.03em] placeholder:text-[#757575] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              />
+
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setRejectId(null)}
+                  className="cursor-pointer rounded-[10px] border border-[#ebebeb] bg-white px-3 py-2 text-[14px] tracking-[-0.03em] text-[#71717b] shadow-[0px_1px_2px_rgba(10,13,20,0.03)] transition-colors hover:bg-[#ececec]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={submitReject}
+                  disabled={!reason.trim()}
+                  className="cursor-pointer rounded-[10px] bg-[#2974ff] px-3 py-2 text-[14px] tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Submit
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
 
   if (pending.length === 0) {
     return (
-      <div className="rounded-2xl border border-[#e7e9ee] bg-white px-6 py-16 text-center text-sm text-[#71717b] shadow-[0px_1px_2px_rgba(0,0,0,0.04)]">
-        No designs awaiting review.
-      </div>
+      <>
+        <div className="rounded-2xl border border-[#e7e9ee] bg-white px-6 py-16 text-center text-sm text-[#71717b] shadow-[0px_1px_2px_rgba(0,0,0,0.04)] h-96 grid place-content-center">
+          No designs awaiting review.
+        </div>
+        {rejectModal}
+      </>
     );
   }
 
   return (
-    <div className="columns-1 gap-4 sm:columns-2 lg:columns-3">
-      {pending.map((item) => (
-        <Card
-          key={item.id}
-          item={item}
-          busy={busy === item.id}
-          onReview={onReview}
-        />
-      ))}
-    </div>
+    <>
+      <div className="columns-1 gap-4 sm:columns-2 lg:columns-3">
+        {pending.map((item) => (
+          <Card
+            key={item.id}
+            item={item}
+            busy={busy === item.id}
+            onReview={onReview}
+          />
+        ))}
+      </div>
+      {rejectModal}
+    </>
   );
 }

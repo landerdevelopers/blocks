@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -21,7 +22,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore } from "@/store/authStore";
-import { cloudflareThumb } from "@/lib/utils";
+import { cloudflareThumb, cloudflareLogo } from "@/lib/utils";
 import { todayIST } from "@/lib/ist";
 import AccountModal from "@/app/components/AccountModal";
 import CreatorProgramModal from "@/app/components/CreatorProgramModal";
@@ -51,6 +52,8 @@ type Design = {
   featured?: boolean;
   // Per-creator manual order; most-recently-pinned leads. Null = unpinned.
   creator_pinned_at?: string | null;
+  // Admin's note when status = 'rejected' — shown as a tooltip on the tag.
+  rejection_reason?: string | null;
 };
 
 type SortKey = "newest" | "oldest" | "most_copied" | "private" | "public";
@@ -104,6 +107,50 @@ const STATUS: Record<Design["status"], { dot: string; label: string }> = {
   rejected: { dot: "#ef4444", label: "Rejected" },
 };
 
+// Render this many designs first; load PAGE more each time the bottom sentinel
+// scrolls into view. Keeps the DOM small for creators with many components.
+const PAGE = 24;
+
+// Portal cache (localStorage) — keyed by username + viewer id (the design set
+// differs for the owner/admin vs a visitor). Lets a revisit paint instantly
+// while a fresh copy is refetched in the background.
+const PORTAL_CACHE_KEY = "creator_portal_v1";
+const PORTAL_TTL = 5 * 60 * 1000;
+
+type PortalEntry = { ts: number; creator: Creator; designs: Design[] };
+
+function readPortalCache(key: string): PortalEntry | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(PORTAL_CACHE_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, PortalEntry>;
+    const entry = map[key];
+    if (!entry || Date.now() - entry.ts > PORTAL_TTL) return null;
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+function writePortalCache(key: string, creator: Creator, designs: Design[]) {
+  if (typeof window === "undefined") return;
+  const entry: PortalEntry = { ts: Date.now(), creator, designs };
+  try {
+    const raw = localStorage.getItem(PORTAL_CACHE_KEY);
+    const map = raw ? (JSON.parse(raw) as Record<string, PortalEntry>) : {};
+    map[key] = entry;
+    localStorage.setItem(PORTAL_CACHE_KEY, JSON.stringify(map));
+  } catch {
+    // Quota — keep only this entry.
+    try {
+      localStorage.setItem(PORTAL_CACHE_KEY, JSON.stringify({ [key]: entry }));
+    } catch {
+      // give up silently
+    }
+  }
+}
+
 export default function CreatorPage() {
   const router = useRouter();
   const params = useParams<{ username: string }>();
@@ -115,6 +162,12 @@ export default function CreatorPage() {
   const [creator, setCreator] = useState<Creator | null>(null);
   const [designs, setDesigns] = useState<Design[]>([]);
   const [loading, setLoading] = useState(true);
+  // True once the design set is known (from cache or fetch) — gates the grid
+  // skeletons vs the empty state.
+  const [designsLoaded, setDesignsLoaded] = useState(false);
+  // How many of the filtered/sorted designs are currently rendered.
+  const [shown, setShown] = useState(PAGE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   const [activeTab, setActiveTab] = useState<string>(TABS[0].db);
   const [sortBy, setSortBy] = useState<SortKey>("newest");
@@ -128,6 +181,14 @@ export default function CreatorPage() {
   // Delete confirmation — id awaiting confirmation (null = closed).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [showCreatorProgram, setShowCreatorProgram] = useState(false);
+
+  // Rejection-reason tooltip — rendered in a portal (document.body) so it's never
+  // clipped or stacked under a card. Holds the anchor position + the message.
+  const [rejectTip, setRejectTip] = useState<{
+    top: number;
+    left: number;
+    text: string;
+  } | null>(null);
 
   // Owner chrome (publish/edit/delete/privacy) shows for the creator viewing
   // their OWN page, and for any admin viewing ANYONE's page (admins have full
@@ -144,6 +205,9 @@ export default function CreatorPage() {
   // Re-pull just the designs (owner/admin see all; visitors see only live).
   // Used on mount and whenever something changes (realtime / tab refocus) so
   // status pills (pending → approved/rejected) stay current without a reload.
+  // Cache key — design set differs per viewer (owner/admin see all).
+  const cacheKey = `${username}:${profile?.id ?? "anon"}`;
+
   const refetchDesigns = useCallback(async () => {
     const { data, error } = await createClient().rpc("get_creator_designs", {
       uname: username,
@@ -155,11 +219,21 @@ export default function CreatorPage() {
     setDesigns((data as Design[] | null) ?? []);
   }, [username]);
 
-  // Load the real creator (public get_creator RPC) + their designs.
-  // Re-runs when the viewer's identity resolves so owner/admin get the full set
-  // once their profile loads.
+  // Load the real creator (public get_creator RPC) + their designs. Cache-first:
+  // a fresh (<5 min) cached portal paints instantly, then a background refetch
+  // updates it. Re-runs when the viewer's identity resolves so owner/admin get
+  // the full set once their profile loads.
   useEffect(() => {
     let active = true;
+
+    const cached = readPortalCache(cacheKey);
+    if (cached) {
+      setCreator(cached.creator);
+      setDesigns(cached.designs);
+      setDesignsLoaded(true);
+      setLoading(false);
+    }
+
     (async () => {
       const supabase = createClient();
       const [{ data: creatorJson }, { data: designRows }] = await Promise.all([
@@ -182,14 +256,17 @@ export default function CreatorPage() {
           created_at: profile.created_at,
         };
       }
+      const rows = (designRows as Design[] | null) ?? [];
       setCreator(c);
-      setDesigns((designRows as Design[] | null) ?? []);
+      setDesigns(rows);
+      setDesignsLoaded(true);
       setLoading(false);
+      if (c) writePortalCache(cacheKey, c, rows);
     })();
     return () => {
       active = false;
     };
-  }, [username, profile?.id]);
+  }, [username, profile?.id, cacheKey]);
 
   // Keep statuses live: refetch when an admin approves/rejects a design.
   // Realtime fires instantly (requires the `components` table to be in the
@@ -316,8 +393,9 @@ export default function CreatorPage() {
   const tabCount = (db: string) =>
     designs.filter((d) => d.category === db).length;
 
-  // Only categories with at least one design.
-  const visibleTabs = TABS.filter((t) => tabCount(t.db) > 0);
+  // Show every category tab, even empty ones (each shows its 0 count and an
+  // empty state when selected).
+  const visibleTabs = TABS;
 
   // Keep the active tab valid as the visible set changes. Adjusting state during
   // render (React's documented pattern) instead of in an effect avoids an extra
@@ -374,14 +452,69 @@ export default function CreatorPage() {
       return b.created_at.localeCompare(a.created_at);
     });
 
+  // Only render the first `shown` of the filtered/sorted set; the rest load as
+  // the sentinel scrolls into view.
+  const paged = visible.slice(0, shown);
+
+  // Reset pagination whenever the category/sort changes.
+  useEffect(() => {
+    setShown(PAGE);
+  }, [activeTab, sortBy]);
+
+  // Infinite scroll — reveal PAGE more designs as the bottom sentinel nears.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setShown((s) => (s < visible.length ? s + PAGE : s));
+        }
+      },
+      { rootMargin: "400px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [visible.length]);
+
   // Public View previews exactly what a visitor sees — no owner chrome (status,
   // privacy pill, pin/edit/delete actions).
   const showOwnerChrome = isOwner && sortBy !== "public";
 
-  if (loading) {
+  // Logos render as square, padded, contained cards (matching the home gallery's
+  // logos layout) instead of the masonry object-cover thumbnails.
+  const isLogosTab = activeTab === "Logos";
+
+  // First load with nothing cached — show a skeleton of the whole portal
+  // instead of a bare "Loading…".
+  if (loading && !creator) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-white font-sans">
-        <p className="text-[14px] tracking-[-0.03em] text-[#71717b]">Loading…</p>
+      <main className="min-h-screen bg-white font-sans">
+        <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-[30px] px-6 py-10 sm:px-12 sm:py-[60px]">
+          <div className="h-9 w-24 animate-pulse rounded-[10px] bg-[#ebebef]" />
+          <div className="flex flex-col gap-[26px]">
+            <div className="flex flex-col gap-5">
+              <div className="flex items-center gap-4">
+                <div className="size-[90px] shrink-0 animate-pulse rounded-[20px] bg-[#ebebef]" />
+                <div className="flex flex-col gap-2">
+                  <div className="h-6 w-40 animate-pulse rounded-md bg-[#ebebef]" />
+                  <div className="h-4 w-24 animate-pulse rounded-md bg-[#ebebef]" />
+                </div>
+              </div>
+              <div className="h-4 w-[320px] max-w-full animate-pulse rounded-md bg-[#ebebef]" />
+            </div>
+            <div className="h-10 w-full max-w-[420px] animate-pulse rounded-[10px] bg-[#f5f5f5]" />
+            <div className="columns-1 gap-[22px] sm:columns-2 lg:columns-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="mb-[22px] break-inside-avoid animate-pulse rounded-[12px] bg-[#ebebef]"
+                  style={{ height: 180 + (i % 3) * 70 }}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
       </main>
     );
   }
@@ -604,29 +737,76 @@ export default function CreatorPage() {
           </div>
 
           {/* Designs */}
-          {visible.length === 0 ? (
+          {!designsLoaded ? (
+            // Grid skeleton while the (uncached) design set loads.
+            <div className="columns-1 gap-[22px] sm:columns-2 lg:columns-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="mb-[22px] break-inside-avoid animate-pulse rounded-[12px] bg-[#ebebef]"
+                  style={{ height: 180 + (i % 3) * 70 }}
+                />
+              ))}
+            </div>
+          ) : visible.length === 0 ? (
             <div className="flex min-h-[240px] flex-col items-center justify-center gap-1 rounded-[12px] border border-dashed border-[#e7e9ee] px-6 text-center">
               <p className="text-[15px] font-medium tracking-[-0.03em] text-[#09090b]">
-                {isOwner
-                  ? "Add components to see them here"
-                  : "No designs published yet"}
+                {sortBy === "public"
+                  ? "No published designs in this category"
+                  : isOwner
+                    ? "Nothing here yet"
+                    : "No designs published yet"}
               </p>
               <p className="text-[14px] tracking-[-0.03em] text-[#a1a1aa]">
-                {isOwner
-                  ? "Publish your first design and it will show up in your portal."
-                  : "This creator hasn't published any designs yet."}
+                {sortBy === "public"
+                  ? "Once your designs are approved and public, they'll appear here — exactly as visitors see them."
+                  : isOwner
+                    ? "Publish a design in this category and it will appear here."
+                    : "This creator hasn't published any designs yet."}
               </p>
             </div>
           ) : (
-            <div className="columns-1 gap-[22px] sm:columns-2 lg:columns-3">
-              {visible.map((d) => (
+            <>
+            <div
+              className={
+                isLogosTab
+                  ? "grid grid-cols-1 gap-[22px] sm:grid-cols-2 lg:grid-cols-3"
+                  : "columns-1 gap-[22px] sm:columns-2 lg:columns-3"
+              }
+            >
+              {paged.map((d) => (
                 <div
                   key={d.id}
-                  className="mb-[22px] flex break-inside-avoid flex-col gap-1.5 rounded-[12px] p-1.5"
+                  className={`flex flex-col gap-1.5 rounded-[12px] p-1.5 ${
+                    isLogosTab ? "" : "mb-[22px] break-inside-avoid"
+                  }`}
                 >
-                  {/* Status (owner only) */}
+                  {/* Status (owner only). Rejected shows a tooltip on hover
+                      with the admin's reason. */}
                   {showOwnerChrome && (
-                    <div className="flex items-center gap-1.5 py-1.5">
+                    <div
+                      className="flex w-fit items-center gap-1.5 py-1.5"
+                      onMouseEnter={
+                        d.status === "rejected"
+                          ? (e) => {
+                              const r =
+                                e.currentTarget.getBoundingClientRect();
+                              setRejectTip({
+                                top: r.top,
+                                left: r.left,
+                                text: d.rejection_reason?.trim()
+                                  ? d.rejection_reason
+                                  : "No reason provided.",
+                              });
+                            }
+                          : undefined
+                      }
+                      onMouseLeave={
+                        d.status === "rejected"
+                          ? () => setRejectTip(null)
+                          : undefined
+                      }
+                    >
                       <span
                         className="size-2.5 rounded-full"
                         style={{ backgroundColor: STATUS[d.status].dot }}
@@ -638,17 +818,33 @@ export default function CreatorPage() {
                   )}
 
                   <div className="group relative">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      alt=""
-                      src={cloudflareThumb(d.preview_url ?? "")}
-                      style={
-                        d.aspect_ratio
-                          ? { aspectRatio: String(d.aspect_ratio) }
-                          : undefined
-                      }
-                      className="w-full rounded-[6px] border border-[#f5f5f5] object-cover"
-                    />
+                    {isLogosTab ? (
+                      // Square, padded, contained — matches the home gallery's
+                      // 3-col logos layout.
+                      <div
+                        className="relative flex w-full items-center justify-center overflow-hidden rounded-[6px] border border-[#e7e9ee] bg-white"
+                        style={{ aspectRatio: "1 / 1", padding: 48 }}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          alt=""
+                          src={cloudflareLogo(d.preview_url ?? "")}
+                          className="size-full object-contain"
+                        />
+                      </div>
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        alt=""
+                        src={cloudflareThumb(d.preview_url ?? "")}
+                        style={
+                          d.aspect_ratio
+                            ? { aspectRatio: String(d.aspect_ratio) }
+                            : undefined
+                        }
+                        className="w-full rounded-[6px] border border-[#f5f5f5] object-cover"
+                      />
+                    )}
 
                     {/* Privacy pill — shown by default (owner) */}
                     {isOwner && (
@@ -707,6 +903,11 @@ export default function CreatorPage() {
                 </div>
               ))}
             </div>
+            {/* Infinite-scroll sentinel — pulls in PAGE more on approach. */}
+            {shown < visible.length && (
+              <div ref={sentinelRef} className="h-10 w-full" />
+            )}
+            </>
           )}
         </div>
       </div>
@@ -747,6 +948,27 @@ export default function CreatorPage() {
           </div>
         </div>
       )}
+
+      {/* Rejection-reason tooltip — portal'd to body so it floats above
+          everything and is never clipped by a card/column. Sits above the
+          rejected tag with a caret pointing down to it. */}
+      {rejectTip &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              top: rejectTip.top - 8,
+              left: rejectTip.left - 24,
+              transform: "translateY(-100%)",
+            }}
+            className="pointer-events-none z-[9999] w-[200px] rounded-[10px] bg-[#18181b] px-3 py-2 text-[13px] leading-[18px] tracking-[-0.03em] text-white shadow-[0px_8px_24px_rgba(0,0,0,0.18)]"
+          >
+            <span className="absolute -bottom-1 left-[25px] size-2 rotate-45 rounded-[1px] bg-[#18181b]" />
+            {rejectTip.text}
+          </div>,
+          document.body,
+        )}
 
       <AccountModal
         open={showAccount}

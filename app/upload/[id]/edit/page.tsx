@@ -15,10 +15,15 @@ export default function EditComponentPage({
   const router = useRouter();
   const isAdmin = useAuthStore((s) => s.isAdmin);
   const profile = useAuthStore((s) => s.profile);
+  const authLoading = useAuthStore((s) => s.authLoading);
   const [initial, setInitial] = useState<UploadInitialValues | null>(null);
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
+    // Wait until auth resolves — otherwise the first render (profile still null,
+    // isAdmin still false) would trip the ownership guard below and redirect even
+    // a valid admin/owner to the homepage.
+    if (authLoading) return;
     const load = async () => {
       const supabase = createClient();
       // Read incl. uploaded_by/is_published so we can enforce ownership.
@@ -60,7 +65,7 @@ export default function EditComponentPage({
       });
     };
     load();
-  }, [id, isAdmin, profile, router]);
+  }, [id, isAdmin, profile, authLoading, router]);
 
   return (
     <main className="flex min-h-screen justify-center bg-[#f5f5f5] px-4 py-10 font-sans">

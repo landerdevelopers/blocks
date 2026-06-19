@@ -16,6 +16,7 @@ type CompRow = {
   aspect_ratio: number | null;
   created_at: string;
   uploaded_by: string | null;
+  figma_data: string | null;
 };
 
 export default async function AdminApprovalsPage() {
@@ -26,7 +27,7 @@ export default async function AdminApprovalsPage() {
   const { data: compData } = await admin
     .from("components")
     .select(
-      "id, category, section, filters, colors, preview_url, aspect_ratio, created_at, uploaded_by",
+      "id, category, section, filters, colors, preview_url, aspect_ratio, created_at, uploaded_by, figma_data",
     )
     .eq("status", "pending")
     .order("created_at", { ascending: false });
@@ -79,6 +80,7 @@ export default async function AdminApprovalsPage() {
       creatorName: prof?.name ?? "Unknown",
       creatorAvatar: prof?.avatar ?? null,
       creatorUsername: prof?.username ?? null,
+      figmaData: c.figma_data,
     };
   });
 

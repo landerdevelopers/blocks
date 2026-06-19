@@ -6,7 +6,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 // session cookie). Approve → published + approved (shows in the gallery);
 // reject → unpublished + rejected (stays on the creator's portal as rejected).
 export async function POST(request: Request) {
-  const { componentId, action } = await request.json().catch(() => ({}));
+  const { componentId, action, reason } = await request
+    .json()
+    .catch(() => ({}));
   if (!componentId || (action !== "approve" && action !== "reject")) {
     return NextResponse.json({ error: "Bad request" }, { status: 400 });
   }
@@ -40,8 +42,17 @@ export async function POST(request: Request) {
           is_published: true,
           featured: false,
           featured_at: null,
+          // Clear any prior rejection note now that it's approved.
+          rejection_reason: null,
         }
-      : { status: "rejected", is_published: false };
+      : {
+          status: "rejected",
+          is_published: false,
+          rejection_reason:
+            typeof reason === "string" && reason.trim()
+              ? reason.trim()
+              : null,
+        };
   const { error } = await admin
     .from("components")
     .update(patch)

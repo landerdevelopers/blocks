@@ -392,21 +392,24 @@ export default function Sidebar({
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  // Published components — used only to compute the count badges.
+  // Published components — used only to compute the count badges. When a creator
+  // is selected, scope to that creator's published designs so the per-category
+  // counts match what the gallery shows for them (not the global totals).
   const [comps, setComps] = useState<Comp[]>([]);
   useEffect(() => {
     let alive = true;
-    createClient()
+    let query = createClient()
       .from("components")
       .select("category, section, filters")
-      .eq("is_published", true)
-      .then(({ data }) => {
-        if (alive) setComps((data as Comp[]) ?? []);
-      });
+      .eq("is_published", true);
+    if (selectedCreator) query = query.eq("uploaded_by", selectedCreator.id);
+    query.then(({ data }) => {
+      if (alive) setComps((data as Comp[]) ?? []);
+    });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [selectedCreator]);
 
   // Accordion: at most one section open at a time. Init to the active category
   // (now SSR-correct — page derives it from ?category), so the right accordion
@@ -468,7 +471,7 @@ export default function Sidebar({
               >
                 <div className="flex min-w-0 items-center gap-2.5">
                   {selectedCreator ? (
-                    <span className="flex size-[30px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#ebebef] text-xs font-medium text-[#09090b]">
+                    <span className="flex size-[30px] shrink-0 items-center justify-center overflow-hidden rounded-md bg-[#ebebef] text-xs font-medium text-[#09090b]">
                       {selectedCreator.avatar_url ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img

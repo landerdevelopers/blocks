@@ -780,6 +780,10 @@ drop function if exists public.search_by_color(text, int);
 alter table public.components add column if not exists status text not null default 'pending'
   check (status in ('pending', 'approved', 'rejected'));
 alter table public.components add column if not exists is_private boolean not null default false;
+-- rejection_reason: the admin's note shown to the creator when a design is
+-- rejected (surfaced as a tooltip on the "Rejected" tag on their portal).
+-- Cleared on approval. Written only by the admin review route (service role).
+alter table public.components add column if not exists rejection_reason text;
 
 -- Existing rows were all admin uploads — treat them as approved so the gallery
 -- (which reads is_published) keeps showing them with a consistent status.
@@ -1165,6 +1169,19 @@ grant execute on function public.set_my_username(text) to authenticated;
 alter table public.components
   add column if not exists creator_pinned_at timestamptz;
 
+-- The gallery orders by creator_pinned_at, which requires the column be
+-- selectable by anon/authenticated (added here since it didn't exist at the main
+-- components grant above). Without it the client read fails with
+-- "permission denied for table components".
+grant select (creator_pinned_at) on public.components to anon, authenticated;
+
+-- Creator portal / creator gallery view: get_creator_designs filters by
+-- uploaded_by and orders by (creator_pinned_at desc, created_at desc). This
+-- composite turns that into an index scan instead of a full scan + sort, which
+-- matters once a creator has many components.
+create index if not exists components_creator_order_idx
+  on public.components (uploaded_by, creator_pinned_at desc nulls last, created_at desc);
+
 -- RPC: pin_creator_design(design_id) — pin one of the caller's designs to the
 -- top of their portal/feed. Owner or admin only. Stamps creator_pinned_at = now
 -- so the most-recently-pinned leads.
@@ -1212,7 +1229,8 @@ returns table (
   created_at        timestamptz,
   copy_count        int,
   featured          boolean,
-  creator_pinned_at timestamptz
+  creator_pinned_at timestamptz,
+  rejection_reason  text
 )
 language plpgsql
 stable
@@ -1237,7 +1255,8 @@ begin
   return query
     select c.id, c.category, c.section, c.preview_url, c.aspect_ratio,
            c.figma_url, c.status, c.is_private, c.is_published,
-           c.created_at, c.copy_count, c.featured, c.creator_pinned_at
+           c.created_at, c.copy_count, c.featured, c.creator_pinned_at,
+           c.rejection_reason
     from components c
     where c.uploaded_by = target
       and (
