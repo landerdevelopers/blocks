@@ -180,7 +180,6 @@ export const useAuthStore = create<AuthState>()(
     {
       name: "auth-store",
       // Only profile + isAdmin persist; transient state always starts fresh.
-      // (Beta lives on profile.beta, so it persists with the profile.)
       partialize: (state) => ({
         profile: state.profile,
         isAdmin: state.isAdmin,

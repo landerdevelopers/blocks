@@ -17,13 +17,16 @@ create table if not exists public.profiles (
   role         text        not null default 'user',
   copies_today int         not null default 0,
   last_copy_date date,
-  -- beta: unlocks all categories. Self-claimed by visiting the beta link while
-  -- logged in (the "Profiles: update own" policy permits the user to set it).
-  beta         boolean     not null default false,
   created_at   timestamptz not null default now()
 );
--- Backfill for databases created before the beta column existed.
-alter table public.profiles add column if not exists beta boolean not null default false;
+-- beta: REMOVED. Every category is now open to all users, so the flag was
+-- dropped. (Self-claim relied on the open update grant, which is now locked
+-- down — see the column-scoped grants below.)
+alter table public.profiles drop column if exists beta;
+-- email: mirrored from auth.users so the analytics page can show a user's email
+-- without an admin.auth API call per row. Populated by handle_new_user on signup
+-- and kept here for existing rows via the backfill below.
+alter table public.profiles add column if not exists email text;
 
 create table if not exists public.components (
   id           uuid primary key default gen_random_uuid(),
@@ -112,6 +115,12 @@ create index if not exists copy_events_user_idx      on public.copy_events (user
 create index if not exists copy_events_component_idx on public.copy_events (component_id);
 create index if not exists login_events_user_idx     on public.login_events (user_id);
 create index if not exists login_events_date_idx     on public.login_events (date);
+-- Analytics window scans: the (date, user_id) composites let get_analytics_windows
+-- run its per-window count(distinct user_id) as index-only scans instead of full
+-- heap scans, and copy_events_date_idx speeds the plain date-range counts.
+create index if not exists copy_events_date_idx       on public.copy_events (date);
+create index if not exists copy_events_date_user_idx  on public.copy_events (date, user_id);
+create index if not exists login_events_date_user_idx on public.login_events (date, user_id);
 -- Dedup: at most one login row per user per day. Doubles as the ON CONFLICT
 -- target for the client-side upsert in AuthProvider.
 create unique index if not exists login_events_user_date_uniq
@@ -130,7 +139,7 @@ security definer
 set search_path = public
 as $$
 begin
-  insert into public.profiles (id, full_name, avatar_url)
+  insert into public.profiles (id, full_name, avatar_url, email)
   values (
     new.id,
     coalesce(
@@ -140,7 +149,8 @@ begin
     coalesce(
       new.raw_user_meta_data ->> 'avatar_url',
       new.raw_user_meta_data ->> 'picture'
-    )
+    ),
+    new.email
   )
   on conflict (id) do nothing;
   return new;
@@ -152,6 +162,14 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row
   execute function public.handle_new_user();
+
+-- One-time backfill of profiles.email from auth.users for rows created before the
+-- email column existed. Idempotent; re-running only touches rows that drifted.
+update public.profiles p
+set email = u.email
+from auth.users u
+where u.id = p.id
+  and p.email is distinct from u.email;
 
 -- -----------------------------------------------------------------------------
 -- Copy-count trigger: bump components.copy_count on every copy_events insert.
@@ -273,6 +291,32 @@ create policy "Profiles: update own"
   for update
   using (auth.uid() = id)
   with check (auth.uid() = id);
+
+-- Backstop against role self-promotion. The column-scoped update grant above is
+-- the primary block (a user has no UPDATE privilege on `role`); this trigger
+-- rejects any role change from an API user session even if that grant is ever
+-- loosened. NOT security definer, so current_user is the real caller:
+-- 'authenticated'/'anon' = blocked; 'postgres' (dashboard SQL) and
+-- 'service_role' (admin scripts / SECURITY DEFINER fns) pass through, so admins
+-- can still set roles manually.
+create or replace function public.prevent_role_self_change()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.role is distinct from old.role
+     and current_user in ('authenticated', 'anon') then
+    raise exception 'not allowed to change role';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_block_role_change on public.profiles;
+create trigger profiles_block_role_change
+  before update on public.profiles
+  for each row
+  execute function public.prevent_role_self_change();
 
 -- components: anyone (incl. anon) may read published rows.
 drop policy if exists "Components: read published" on public.components;
