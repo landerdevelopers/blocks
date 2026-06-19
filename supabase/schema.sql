@@ -115,6 +115,12 @@ create index if not exists copy_events_user_idx      on public.copy_events (user
 create index if not exists copy_events_component_idx on public.copy_events (component_id);
 create index if not exists login_events_user_idx     on public.login_events (user_id);
 create index if not exists login_events_date_idx     on public.login_events (date);
+-- Analytics window scans: the (date, user_id) composites let get_analytics_windows
+-- run its per-window count(distinct user_id) as index-only scans instead of full
+-- heap scans, and copy_events_date_idx speeds the plain date-range counts.
+create index if not exists copy_events_date_idx       on public.copy_events (date);
+create index if not exists copy_events_date_user_idx  on public.copy_events (date, user_id);
+create index if not exists login_events_date_user_idx on public.login_events (date, user_id);
 -- Dedup: at most one login row per user per day. Doubles as the ON CONFLICT
 -- target for the client-side upsert in AuthProvider.
 create unique index if not exists login_events_user_date_uniq
@@ -709,14 +715,19 @@ drop function if exists public.search_by_color(text, int);
 -- ---------------------------------------------------------------------------
 -- get_per_user_activity(activity_date date)
 -- Per-user copy activity for a single IST day: one row per user who copied that
--- day, with their copy count and the list of components they copied (most
--- recent first). Powers the "Per-user activity" table.
+-- day, with their copy count, the components they copied (most recent first),
+-- and the timestamp of their most recent copy. Powers the "Per-user activity"
+-- table. Ordered by most recent copy first.
 -- ---------------------------------------------------------------------------
+-- Drop first: the return type (OUT columns) changed when last_copy was added,
+-- and create-or-replace can't alter a function's return type.
+drop function if exists public.get_per_user_activity(date);
 create or replace function public.get_per_user_activity(activity_date date)
 returns table (
   user_id       uuid,
   copies_count  bigint,
-  component_ids uuid[]
+  component_ids uuid[],
+  last_copy     timestamptz
 )
 language sql
 stable
@@ -724,20 +735,23 @@ as $$
   select
     ce.user_id,
     count(*) as copies_count,
-    array_agg(ce.component_id order by ce.copied_at desc) as component_ids
+    array_agg(ce.component_id order by ce.copied_at desc) as component_ids,
+    max(ce.copied_at) as last_copy
   from public.copy_events ce
   where ce.date = activity_date
     and ce.user_id is not null
   group by ce.user_id
-  order by count(*) desc;
+  order by max(ce.copied_at) desc;
 $$;
 
 -- ---------------------------------------------------------------------------
 -- get_analytics_windows(d_today, d_start7, d_date)
 -- All KPI windows in a single round trip. Returns a JSON object keyed by window
 -- ('today', '7d', 'all', and 'date' when d_date is non-null); each value holds
--- totalCopies, uniqueCopiers, totalLogins, uniqueLogins, newAccounts and a
--- byCategory map. Every metric is computed in-DB — no event rows leave Postgres.
+-- totalCopies, uniqueCopiers, totalLogins, dau, newAccounts and a byCategory map.
+-- dau = average daily active users (distinct users who logged in OR copied per
+-- day, averaged over the window's calendar days; today/date = that day's count).
+-- Every metric is computed in-DB — no event rows leave Postgres.
 --
 -- Window date ranges (on the events' `date` column, already IST day-stamped):
 --   today → [d_today, d_today]   7d → [d_start7, d_today]   all → (… , d_today]
@@ -809,39 +823,66 @@ begin
     join public.components c on c.id = ce.component_id
     where ce.date <= d_today
     group by c.category
+  ),
+  -- Active users = logged in OR copied. Union both event streams.
+  act as (
+    select user_id, date from public.copy_events
+      where date <= d_today and user_id is not null
+    union all
+    select user_id, date from public.login_events
+      where date <= d_today and user_id is not null
+  ),
+  -- Distinct active users per calendar day (one row per day with activity).
+  dd as (
+    select date, count(distinct user_id) as u
+    from act
+    group by date
+  ),
+  -- DAU = average daily active users over the window's calendar days. Empty days
+  -- count as 0 (sum of per-day uniques ÷ number of days in the window). All-time
+  -- divides by the span from the first active day to today.
+  ad as (
+    select
+      round(coalesce(sum(u) filter (where date = d_today), 0))::int as t_dau,
+      round(coalesce(sum(u) filter (where date between d_start7 and d_today), 0)::numeric
+            / greatest(1, (d_today - d_start7 + 1)))::int as w_dau,
+      round(coalesce(sum(u), 0)::numeric
+            / greatest(1, (d_today - coalesce(min(date), d_today) + 1)))::int as a_dau,
+      round(coalesce(sum(u) filter (where d_date is not null and date = d_date), 0))::int as d_dau
+    from dd
   )
   select jsonb_build_object(
     'today', jsonb_build_object(
       'totalCopies', ca.t_total, 'uniqueCopiers', ca.t_uniq,
-      'totalLogins', la.t_total, 'uniqueLogins', la.t_uniq,
+      'totalLogins', la.t_total, 'dau', ad.t_dau,
       'newAccounts', pa.t_new,
       'byCategory', (select coalesce(jsonb_object_agg(category, t_c)
                             filter (where category is not null), '{}'::jsonb) from cat)
     ),
     '7d', jsonb_build_object(
       'totalCopies', ca.w_total, 'uniqueCopiers', ca.w_uniq,
-      'totalLogins', la.w_total, 'uniqueLogins', la.w_uniq,
+      'totalLogins', la.w_total, 'dau', ad.w_dau,
       'newAccounts', pa.w_new,
       'byCategory', (select coalesce(jsonb_object_agg(category, w_c)
                             filter (where category is not null), '{}'::jsonb) from cat)
     ),
     'all', jsonb_build_object(
       'totalCopies', ca.a_total, 'uniqueCopiers', ca.a_uniq,
-      'totalLogins', la.a_total, 'uniqueLogins', la.a_uniq,
+      'totalLogins', la.a_total, 'dau', ad.a_dau,
       'newAccounts', pa.a_new,
       'byCategory', (select coalesce(jsonb_object_agg(category, a_c)
                             filter (where category is not null), '{}'::jsonb) from cat)
     ),
     'date', case when d_date is null then null else jsonb_build_object(
       'totalCopies', ca.d_total, 'uniqueCopiers', ca.d_uniq,
-      'totalLogins', la.d_total, 'uniqueLogins', la.d_uniq,
+      'totalLogins', la.d_total, 'dau', ad.d_dau,
       'newAccounts', pa.d_new,
       'byCategory', (select coalesce(jsonb_object_agg(category, d_c)
                             filter (where category is not null), '{}'::jsonb) from cat)
     ) end
   )
   into result
-  from ca, la, pa;
+  from ca, la, pa, ad;
 
   return result;
 end;

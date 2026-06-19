@@ -9,10 +9,10 @@ type Row = {
   name: string;
   count: number;
   components: string[];
-  lastLogin: string | null;
+  lastCopy: string | null;
 };
 
-type SortKey = "copies" | "login";
+type SortKey = "copies" | "recent";
 
 // Render at most this many rows before the "Show all" toggle.
 const INITIAL = 50;
@@ -41,15 +41,16 @@ export default function PerUserActivity({
   categoryById: Record<string, string>;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const [sort, setSort] = useState<SortKey>("copies");
+  // Default to most-recent-copy order (the RPC already returns rows that way).
+  const [sort, setSort] = useState<SortKey>("recent");
 
   const sorted = [...rows].sort((a, b) => {
     if (sort === "copies") return b.count - a.count;
-    // Recent login: latest first, users with no login last.
-    if (!a.lastLogin && !b.lastLogin) return 0;
-    if (!a.lastLogin) return 1;
-    if (!b.lastLogin) return -1;
-    return b.lastLogin.localeCompare(a.lastLogin); // ISO strings sort lexically
+    // Recent copy: latest first, users with no copy last.
+    if (!a.lastCopy && !b.lastCopy) return 0;
+    if (!a.lastCopy) return 1;
+    if (!b.lastCopy) return -1;
+    return b.lastCopy.localeCompare(a.lastCopy); // ISO strings sort lexically
   });
   const visible = showAll ? sorted : sorted.slice(0, INITIAL);
   const moreCount = rows.length - INITIAL;
@@ -67,8 +68,8 @@ export default function PerUserActivity({
             onChange={(e) => setSort(e.target.value as SortKey)}
             className="cursor-pointer rounded-lg border border-[#e7e9ee] bg-white px-2.5 py-1.5 text-sm font-medium text-[#09090b] outline-none"
           >
+            <option value="recent">Recent copy</option>
             <option value="copies">Number of copies</option>
-            <option value="login">Recent login</option>
           </select>
         </label>
       </div>
@@ -79,7 +80,7 @@ export default function PerUserActivity({
               <th className="px-5 py-3 font-medium">User</th>
               <th className="px-5 py-3 font-medium">Name</th>
               <th className="px-5 py-3 text-right font-medium">Copies</th>
-              <th className="px-5 py-3 font-medium">Last login</th>
+              <th className="px-5 py-3 font-medium">Last copy</th>
               <th className="px-5 py-3 font-medium">Component IDs</th>
             </tr>
           </thead>
@@ -100,7 +101,7 @@ export default function PerUserActivity({
                   <td className="px-5 py-3">{u.name}</td>
                   <td className="px-5 py-3 text-right font-medium">{u.count}</td>
                   <td className="whitespace-nowrap px-5 py-3 text-[#52525b]">
-                    {fmtIST(u.lastLogin)}
+                    {fmtIST(u.lastCopy)}
                   </td>
                   <td className="px-5 py-3">
                     <div className="flex flex-wrap gap-1">

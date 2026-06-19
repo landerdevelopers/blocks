@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { Suspense, use, useState } from "react";
 import { cloudflareThumb } from "@/lib/utils";
 import PerUserActivity from "./PerUserActivity";
 
@@ -17,7 +17,9 @@ export type Stats = {
   totalCopies: number;
   uniqueCopiers: number;
   totalLogins: number;
-  uniqueLogins: number;
+  // Average daily active users (distinct logged-in-or-copied users per day,
+  // averaged over the window's days; today/date = that single day's count).
+  dau: number;
   newAccounts: number;
   byCategory: Record<string, number>;
 };
@@ -28,7 +30,7 @@ export type PerUserRow = {
   name: string;
   count: number;
   components: string[];
-  lastLogin: string | null;
+  lastCopy: string | null;
 };
 
 export type TopComponent = {
@@ -38,38 +40,39 @@ export type TopComponent = {
   preview_url: string | null;
 };
 
+// Everything the page streams in after the shell paints. Passed as a promise so
+// the chrome (title/tabs/date picker) renders instantly and the heavy reads show
+// skeletons until they resolve.
+export type AnalyticsData = {
+  stats: { today: Stats; "7d": Stats; all: Stats; date: Stats | null };
+  topComponents: TopComponent[];
+  landerClicks: number;
+  perUser: { tabs: PerUserRow[]; date: PerUserRow[] | null };
+  categoryById: Record<string, string>;
+};
+
 type View = "today" | "7d" | "all" | "date";
 const TABS = { today: "Today", "7d": "Last 7 Days", all: "All Time" } as const;
 
 const card =
   "rounded-2xl border border-[#e7e9ee] bg-white shadow-[0px_1px_2px_rgba(0,0,0,0.04)]";
 
+const skel = "animate-pulse rounded-md bg-[#ebebef]";
+
 export default function AnalyticsView({
   today,
   initialDate,
-  stats,
-  topComponents,
-  landerClicks,
-  perUser,
-  categoryById,
+  dataPromise,
 }: {
   today: string;
   initialDate: string | null;
-  stats: { today: Stats; "7d": Stats; all: Stats; date: Stats | null };
-  topComponents: TopComponent[];
-  landerClicks: number;
-  perUser: { tabs: PerUserRow[]; date: PerUserRow[] | null };
-  categoryById: Record<string, string>;
+  dataPromise: Promise<AnalyticsData>;
 }) {
   // Tabs switch instantly client-side (data for all three is already loaded).
   // The date view comes from the server (?date=…) and can't be prefetched.
   const [view, setView] = useState<View>(initialDate ? "date" : "today");
 
-  const current: Stats =
-    view === "date" ? (stats.date ?? stats.today) : stats[view];
   const rangeLabel = view === "date" ? (initialDate ?? "") : TABS[view];
-  const activeDay = view === "date" ? (initialDate ?? today) : today;
-  const perUserRows = view === "date" ? (perUser.date ?? []) : perUser.tabs;
 
   // Switching to a tab clears any ?date in the URL so a refresh stays put.
   const selectTab = (v: "today" | "7d" | "all") => {
@@ -79,23 +82,10 @@ export default function AnalyticsView({
     }
   };
 
-  const kpis = [
-    { label: "Total copies", value: current.totalCopies },
-    { label: "Unique copiers", value: current.uniqueCopiers },
-    { label: "New accounts", value: current.newAccounts },
-    { label: "Total logins", value: current.totalLogins },
-    { label: "Unique logins", value: current.uniqueLogins },
-  ];
-
-  const catTotal = CATEGORIES.reduce(
-    (s, c) => s + (current.byCategory[c] ?? 0),
-    0,
-  );
-
   return (
     <main className="min-h-screen bg-[#f5f5f5] px-6 py-9 text-[#09090b] tracking-[-0.01em]">
       <div className="mx-auto flex w-full max-w-275 flex-col gap-6">
-        {/* Toolbar: title + range controls */}
+        {/* Toolbar: title + range controls — renders instantly. */}
         <header className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
           <div className="flex flex-col gap-1">
             <h1 className="text-[26px] font-semibold tracking-[-0.04em]">
@@ -161,38 +151,86 @@ export default function AnalyticsView({
           </div>
         </header>
 
-        {/* KPI grid — five range metrics, equal weight. */}
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-          {kpis.map((k) => (
-            <div key={k.label} className={`${card} flex flex-col gap-2.5 p-5`}>
-              <span className="text-[13px] tracking-[-0.03em] text-[#71717b]">
-                {k.label}
-              </span>
-              <span className="text-[30px] font-semibold leading-none tracking-[-0.04em] tabular-nums">
-                {k.value.toLocaleString()}
-              </span>
-            </div>
-          ))}
-        </section>
+        {/* Everything data-dependent streams in; skeletons show until ready. */}
+        <Suspense fallback={<AnalyticsSkeleton />}>
+          <AnalyticsContent
+            dataPromise={dataPromise}
+            view={view}
+            today={today}
+            initialDate={initialDate}
+          />
+        </Suspense>
+      </div>
+    </main>
+  );
+}
 
-        {/* Lander visits + Copies by category, same row. */}
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]">
-          {/* Lander Studio visits — black card. */}
-          <div className="flex flex-col justify-center gap-1 rounded-2xl bg-[#09090b] px-5 py-4 text-white">
-            <span className="text-xs tracking-[-0.03em] text-white/55">
-              Lander Studio visits · all time
+function AnalyticsContent({
+  dataPromise,
+  view,
+  today,
+  initialDate,
+}: {
+  dataPromise: Promise<AnalyticsData>;
+  view: View;
+  today: string;
+  initialDate: string | null;
+}) {
+  const { stats, topComponents, landerClicks, perUser, categoryById } =
+    use(dataPromise);
+
+  const current: Stats =
+    view === "date" ? (stats.date ?? stats.today) : stats[view];
+  const activeDay = view === "date" ? (initialDate ?? today) : today;
+  const perUserRows = view === "date" ? (perUser.date ?? []) : perUser.tabs;
+
+  const kpis = [
+    { label: "Total copies", value: current.totalCopies },
+    { label: "Unique copiers", value: current.uniqueCopiers },
+    { label: "New accounts", value: current.newAccounts },
+    { label: "Total logins", value: current.totalLogins },
+    { label: "DAU", value: current.dau },
+  ];
+
+  const catTotal = CATEGORIES.reduce(
+    (s, c) => s + (current.byCategory[c] ?? 0),
+    0,
+  );
+
+  return (
+    <>
+      {/* KPI grid — five range metrics, equal weight. */}
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {kpis.map((k) => (
+          <div key={k.label} className={`${card} flex flex-col gap-2.5 p-5`}>
+            <span className="text-[13px] tracking-[-0.03em] text-[#71717b]">
+              {k.label}
             </span>
-            <span className="text-[28px] font-semibold leading-none tracking-[-0.04em] tabular-nums">
-              {landerClicks.toLocaleString()}
+            <span className="text-[30px] font-semibold leading-none tracking-[-0.04em] tabular-nums">
+              {(k.value ?? 0).toLocaleString()}
             </span>
           </div>
+        ))}
+      </section>
 
-          {/* Copies by category — fills the row; pills span the full card width. */}
-          <div className={`${card} flex flex-col gap-3.5 p-5`}>
-            <h2 className="text-[15px] font-semibold tracking-[-0.03em] text-[#09090b]">
-              Copies by category
-            </h2>
-            <div className="flex flex-wrap gap-2">
+      {/* Lander visits + Copies by category, same row. */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]">
+        {/* Lander Studio visits — black card. */}
+        <div className="flex flex-col justify-center gap-1 rounded-2xl bg-[#09090b] px-5 py-4 text-white">
+          <span className="text-xs tracking-[-0.03em] text-white/55">
+            Lander Studio visits · all time
+          </span>
+          <span className="text-[28px] font-semibold leading-none tracking-[-0.04em] tabular-nums">
+            {landerClicks.toLocaleString()}
+          </span>
+        </div>
+
+        {/* Copies by category — fills the row; pills span the full card width. */}
+        <div className={`${card} flex flex-col gap-3.5 p-5`}>
+          <h2 className="text-[15px] font-semibold tracking-[-0.03em] text-[#09090b]">
+            Copies by category
+          </h2>
+          <div className="flex flex-wrap gap-2">
             {/* Total — black pill. */}
             <span className="flex items-center gap-2 rounded-full bg-[#09090b] px-3 py-1.5 text-white">
               <span className="text-[13px] tracking-[-0.03em]">Total</span>
@@ -226,70 +264,137 @@ export default function AnalyticsView({
                 </span>
               );
             })}
-            </div>
           </div>
-        </section>
+        </div>
+      </section>
 
-        {/* Top copied components — ranked list (all time). */}
-        <section className={`${card} flex flex-col overflow-hidden`}>
-          <div className="flex items-baseline justify-between border-b border-[#f0f1f3] px-6 py-4">
-            <h2 className="text-[15px] font-semibold tracking-[-0.03em] text-[#09090b]">
-              Top copied components
-            </h2>
-            <span className="text-xs tracking-[-0.03em] text-[#71717b]">
-              All time
-            </span>
+      {/* Top copied components — ranked list (all time). */}
+      <section className={`${card} flex flex-col overflow-hidden`}>
+        <div className="flex items-baseline justify-between border-b border-[#f0f1f3] px-6 py-4">
+          <h2 className="text-[15px] font-semibold tracking-[-0.03em] text-[#09090b]">
+            Top copied components
+          </h2>
+          <span className="text-xs tracking-[-0.03em] text-[#71717b]">
+            All time
+          </span>
+        </div>
+        {topComponents.length === 0 ? (
+          <div className="px-6 py-12 text-center text-sm text-[#71717b]">
+            No copies yet.
           </div>
-          {topComponents.length === 0 ? (
-            <div className="px-6 py-12 text-center text-sm text-[#71717b]">
-              No copies yet.
-            </div>
-          ) : (
-            <ul className="divide-y divide-[#f0f1f3]">
-              {topComponents.map((c, i) => (
-                <li
-                  key={c.id}
-                  className="flex items-center gap-3.5 px-6 py-2.5 transition-colors hover:bg-[#fafafa]"
+        ) : (
+          <ul className="divide-y divide-[#f0f1f3]">
+            {topComponents.map((c, i) => (
+              <li
+                key={c.id}
+                className="flex items-center gap-3.5 px-6 py-2.5 transition-colors hover:bg-[#fafafa]"
+              >
+                <span className="w-4 shrink-0 text-center text-[13px] font-medium tabular-nums text-[#a1a1aa]">
+                  {i + 1}
+                </span>
+                {c.preview_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={cloudflareThumb(c.preview_url)}
+                    alt=""
+                    className="h-9 w-14 shrink-0 rounded-md border border-[#e7e9ee] bg-white object-contain"
+                  />
+                ) : (
+                  <div className="h-9 w-14 shrink-0 rounded-md border border-[#e7e9ee] bg-[#f5f5f5]" />
+                )}
+                <Link
+                  href={`/upload/${c.id}/edit`}
+                  title={c.id}
+                  className="min-w-0 flex-1 truncate font-mono text-xs text-[#52525b] underline-offset-2 hover:text-[#2974ff] hover:underline"
                 >
-                  <span className="w-4 shrink-0 text-center text-[13px] font-medium tabular-nums text-[#a1a1aa]">
-                    {i + 1}
-                  </span>
-                  {c.preview_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={cloudflareThumb(c.preview_url)}
-                      alt=""
-                      className="h-9 w-14 shrink-0 rounded-md border border-[#e7e9ee] bg-white object-contain"
-                    />
-                  ) : (
-                    <div className="h-9 w-14 shrink-0 rounded-md border border-[#e7e9ee] bg-[#f5f5f5]" />
-                  )}
-                  <Link
-                    href={`/upload/${c.id}/edit`}
-                    title={c.id}
-                    className="min-w-0 flex-1 truncate font-mono text-xs text-[#52525b] underline-offset-2 hover:text-[#2974ff] hover:underline"
-                  >
-                    {c.id}
-                  </Link>
-                  <span className="shrink-0 rounded-md border border-[#e7e9ee] bg-[#f5f5f5] px-2 py-0.5 text-[11px] tracking-[-0.03em] text-[#52525b]">
-                    {c.category}
-                  </span>
-                  <span className="w-10 shrink-0 text-right text-sm font-semibold tabular-nums">
-                    {c.copy_count.toLocaleString()}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+                  {c.id}
+                </Link>
+                <span className="shrink-0 rounded-md border border-[#e7e9ee] bg-[#f5f5f5] px-2 py-0.5 text-[11px] tracking-[-0.03em] text-[#52525b]">
+                  {c.category}
+                </span>
+                <span className="w-10 shrink-0 text-right text-sm font-semibold tabular-nums">
+                  {c.copy_count.toLocaleString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
-        {/* Per-user activity — top 50 with a "Show all" toggle + sort. */}
-        <PerUserActivity
-          rows={perUserRows}
-          day={activeDay}
-          categoryById={categoryById}
-        />
-      </div>
-    </main>
+      {/* Per-user activity — top 50 with a "Show all" toggle + sort. */}
+      <PerUserActivity
+        rows={perUserRows}
+        day={activeDay}
+        categoryById={categoryById}
+      />
+    </>
+  );
+}
+
+// Skeleton placeholders for the streamed sections — same frames/sizes as the
+// real content so the layout doesn't shift when data lands.
+function AnalyticsSkeleton() {
+  return (
+    <>
+      {/* KPI grid */}
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className={`${card} flex flex-col gap-2.5 p-5`}>
+            <div className={`${skel} h-3 w-20`} />
+            <div className={`${skel} h-7 w-16`} />
+          </div>
+        ))}
+      </section>
+
+      {/* Lander + category */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]">
+        <div className="flex flex-col justify-center gap-2 rounded-2xl bg-[#09090b] px-5 py-4">
+          <div className="h-3 w-32 animate-pulse rounded-md bg-white/20" />
+          <div className="h-6 w-20 animate-pulse rounded-md bg-white/20" />
+        </div>
+        <div className={`${card} flex flex-col gap-3.5 p-5`}>
+          <div className={`${skel} h-4 w-36`} />
+          <div className="flex flex-wrap gap-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className={`${skel} h-8 w-28 rounded-full`} />
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Top components */}
+      <section className={`${card} flex flex-col overflow-hidden`}>
+        <div className="flex items-baseline justify-between border-b border-[#f0f1f3] px-6 py-4">
+          <div className={`${skel} h-4 w-40`} />
+          <div className={`${skel} h-3 w-14`} />
+        </div>
+        <ul className="divide-y divide-[#f0f1f3]">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <li key={i} className="flex items-center gap-3.5 px-6 py-2.5">
+              <div className={`${skel} h-3 w-4`} />
+              <div className={`${skel} h-9 w-14`} />
+              <div className={`${skel} h-3 flex-1`} />
+              <div className={`${skel} h-5 w-16 rounded-md`} />
+              <div className={`${skel} h-4 w-10`} />
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Per-user activity table */}
+      <section className="flex flex-col gap-3">
+        <div className={`${skel} h-4 w-56`} />
+        <div className="overflow-hidden rounded-2xl border border-[#e7e9ee] bg-white">
+          <div className="border-b border-[#e7e9ee] bg-[#fafafa] px-5 py-3">
+            <div className={`${skel} h-3 w-full max-w-md`} />
+          </div>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="border-b border-[#f0f1f3] px-5 py-3 last:border-0">
+              <div className={`${skel} h-3.5 w-full`} />
+            </div>
+          ))}
+        </div>
+      </section>
+    </>
   );
 }
