@@ -41,10 +41,13 @@ const CAT_MAP: Record<string, string> = {
   illustrations: "Illustrations",
 };
 
-type Comp = {
-  category: string | null;
-  section: string | null;
-  filters: string[] | null;
+// Pre-aggregated counts from get_sidebar_counts, fetched + cached server-side
+// and passed in as a prop so badges are correct in the first server-rendered
+// HTML (no flash, no hydration mismatch, no client query).
+export type SidebarCounts = {
+  categories: Record<string, number>;
+  sections: Record<string, number>;
+  logoLetters: string[];
 };
 
 
@@ -157,29 +160,28 @@ function SectionCard({
   onToggle,
   selected,
   onSelect,
-  comps,
+  sidebarCounts,
 }: {
   section: Section;
   open: boolean;
   onToggle: () => void;
   selected: Set<string>;
   onSelect: (key: string, sectionId: string) => void;
-  comps: Comp[];
+  sidebarCounts: SidebarCounts;
 }) {
   // Every category is open to everyone now, showing its live count badge.
   const hasContent = !!(section.tags || section.styles || section.letters);
   const select = (key: string) => onSelect(key, section.id);
 
-  // Components in this category — drives the count badges (0 when none).
-  const catComps = comps.filter((c) => c.category === CAT_MAP[section.id]);
+  // Count badges come from the pre-aggregated RPC (instant, accurate, no drift).
+  const dbCat = CAT_MAP[section.id];
+  const categoryCount = sidebarCounts.categories[dbCat] ?? 0;
   const sectionCount = (label: string) =>
-    catComps.filter((c) => c.section === label).length;
+    sidebarCounts.sections[`${dbCat}|${label}`] ?? 0;
 
   // Letters (logos) that actually have a component — others are hidden so the
   // filter only offers letters with logos behind them.
-  const availableLetters = new Set(
-    catComps.flatMap((c) => c.filters ?? []),
-  );
+  const availableLetters = new Set(sidebarCounts.logoLetters ?? []);
   const letters = section.letters?.filter((l) => availableLetters.has(l));
 
   const headerInner = (
@@ -189,7 +191,7 @@ function SectionCard({
           {section.label}
         </span>
         <span className="text-[14px] leading-none tracking-[-0.03em] text-[#71717b]">
-          ({catComps.length})
+          ({categoryCount})
         </span>
       </div>
       <ChevronDown
@@ -314,6 +316,7 @@ export default function Sidebar({
   activeCategory,
   onBecomeCreator,
   onCreatorSelect,
+  sidebarCounts,
 }: {
   cols: number;
   onColsChange: (n: number) => void;
@@ -334,6 +337,8 @@ export default function Sidebar({
   // A creator was picked (id) or cleared (null) — parent filters the gallery to
   // that creator's components.
   onCreatorSelect?: (creatorId: string | null) => void;
+  // Pre-aggregated count badges (server-fetched, server-cached).
+  sidebarCounts: SidebarCounts;
 }) {
   const router = useRouter();
   const profile = useAuthStore((s) => s.profile);
@@ -391,25 +396,6 @@ export default function Sidebar({
   // mismatch on their count/rounded classes.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-
-  // Published components — used only to compute the count badges. When a creator
-  // is selected, scope to that creator's published designs so the per-category
-  // counts match what the gallery shows for them (not the global totals).
-  const [comps, setComps] = useState<Comp[]>([]);
-  useEffect(() => {
-    let alive = true;
-    let query = createClient()
-      .from("components")
-      .select("category, section, filters")
-      .eq("is_published", true);
-    if (selectedCreator) query = query.eq("uploaded_by", selectedCreator.id);
-    query.then(({ data }) => {
-      if (alive) setComps((data as Comp[]) ?? []);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [selectedCreator]);
 
   // Accordion: at most one section open at a time. Init to the active category
   // (now SSR-correct — page derives it from ?category), so the right accordion
@@ -667,7 +653,7 @@ export default function Sidebar({
               onToggle={() => toggleOpen(s.id)}
               selected={selected}
               onSelect={selectChip}
-              comps={comps}
+              sidebarCounts={sidebarCounts}
             />
           ))}
 

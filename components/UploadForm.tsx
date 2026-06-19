@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 import { hexToHsl } from "@/lib/utils";
+import { revalidateSidebarCounts } from "@/app/actions";
 
 // Compress + convert to WebP client-side before upload. Returns the new file
 // plus the aspect ratio computed from the (possibly downscaled) canvas.
@@ -486,6 +487,12 @@ export default function UploadForm({
         setError(dbErr.message);
         return;
       }
+      // Sidebar count badges are cached server-side (30 min) — invalidate so a
+      // new/edited component's category/section/letter counts refresh on the
+      // next load instead of waiting out the window. Fire-and-forget.
+      revalidateSidebarCounts().catch(() => {
+        // non-critical — counts self-heal on the next revalidate
+      });
       if (file && data?.preview_url) {
         setExistingPreview(data.preview_url);
         setExistingAspect((data as SavedComponent).aspect_ratio ?? null);
