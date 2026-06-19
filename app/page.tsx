@@ -26,13 +26,6 @@ import { Textarea } from "@/components/ui/textarea";
 
 const DAILY_LIMIT = 10;
 
-// Beta access — share the link `<site>/?beta=<BETA_TOKEN>`. Anyone who opens it
-// is flagged as a beta user (persisted per browser) and unlocks all categories.
-// Change the token to invalidate every previously-shared beta link.
-const BETA_TOKEN = "blocks-beta-2026";
-// localStorage flag: a beta claim is pending (survives the login redirect).
-const BETA_PENDING_KEY = "beta_pending";
-
 // Suggest-improvements quota: 3 submissions per ISO week, tracked per browser in
 // localStorage. The button hides once used up and reappears the next week.
 const SUGGEST_WEEKLY_LIMIT = 3;
@@ -128,14 +121,7 @@ function HomeInner() {
   const setProfile = useAuthStore((s) => s.setProfile);
   const authLoading = useAuthStore((s) => s.authLoading);
   const setShowOnboarding = useAuthStore((s) => s.setShowOnboarding);
-  const isAdmin = useAuthStore((s) => s.isAdmin);
-  // Session email is set as soon as a session exists — i.e. before the profile
-  // finishes loading. Used to detect "already signing in" so the beta-claim
-  // flow doesn't flash the login modal during that gap.
-  const sessionEmail = useAuthStore((s) => s.email);
   const loggedIn = !!profile;
-  // Admins and beta users get every category; everyone else gets Website only.
-  const fullAccess = isAdmin || !!profile?.beta;
 
   // Fresh magic-link login → open onboarding immediately, before any auth event.
   const searchParams = useSearchParams();
@@ -151,53 +137,6 @@ function HomeInner() {
     // Strip the param so it doesn't persist on refresh.
     window.history.replaceState(null, "", window.location.pathname);
   }, [onboardingRedirect, setShowOnboarding]);
-
-  // Beta link — opening `?beta=<token>` records a durable "claim" intent and
-  // strips the param. The claim is applied to the account below once a profile
-  // is available (surviving the login redirect for logged-out visitors).
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (searchParams.get("beta") !== BETA_TOKEN) return;
-    localStorage.setItem(BETA_PENDING_KEY, "1");
-    const params = new URLSearchParams(window.location.search);
-    params.delete("beta");
-    const qs = params.toString();
-    window.history.replaceState({}, "", qs ? `?${qs}` : window.location.pathname);
-  }, [searchParams]);
-
-  // A pending beta claim + a truly logged-out visitor → prompt login so they can
-  // claim. Gate on sessionEmail too: right after the login redirect the session
-  // exists but the profile is still loading, and we must NOT reopen the modal.
-  useEffect(() => {
-    if (authLoading || loggedIn || sessionEmail) return;
-    if (localStorage.getItem(BETA_PENDING_KEY) === "1") setShowLogin(true);
-  }, [authLoading, loggedIn, sessionEmail]);
-
-  // Once a session exists, never keep the login modal open (covers the case
-  // where it was opened for a logged-out beta visitor who has now signed in).
-  useEffect(() => {
-    if (sessionEmail) setShowLogin(false);
-  }, [sessionEmail]);
-
-  // Apply a pending beta claim to the account once the profile is available.
-  useEffect(() => {
-    if (!profile) return;
-    if (localStorage.getItem(BETA_PENDING_KEY) !== "1") return;
-    if (profile.beta) {
-      localStorage.removeItem(BETA_PENDING_KEY);
-      return;
-    }
-    (async () => {
-      const { error } = await createClient()
-        .from("profiles")
-        .update({ beta: true })
-        .eq("id", profile.id);
-      if (!error) {
-        setProfile({ ...profile, beta: true });
-        localStorage.removeItem(BETA_PENDING_KEY);
-      }
-    })();
-  }, [profile, setProfile]);
 
   const [cols, setCols] = useState(() => {
     if (typeof window === "undefined") return 3;
@@ -359,27 +298,16 @@ function HomeInner() {
     setColorSearchLoading(false);
   };
 
-  // Persist the active category to localStorage. Admins also reflect it in the
-  // URL (?category=…) for refresh/share; normal users get no category in the URL
-  // (any legacy ?category is stripped).
+  // Persist the active category to localStorage and reflect it in the URL
+  // (?category=…) for refresh/share — for everyone.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const cat = activeCategory ?? "website";
     localStorage.setItem("active_category", cat);
     const params = new URLSearchParams(window.location.search);
-    if (fullAccess) {
-      params.set("category", cat);
-      window.history.replaceState({}, "", `?${params.toString()}`);
-    } else if (params.has("category")) {
-      params.delete("category");
-      const qs = params.toString();
-      window.history.replaceState(
-        {},
-        "",
-        qs ? `?${qs}` : window.location.pathname,
-      );
-    }
-  }, [activeCategory, fullAccess]);
+    params.set("category", cat);
+    window.history.replaceState({}, "", `?${params.toString()}`);
+  }, [activeCategory]);
 
   // Persist the single shared column count to localStorage.
   useEffect(() => {

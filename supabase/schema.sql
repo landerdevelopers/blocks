@@ -17,13 +17,16 @@ create table if not exists public.profiles (
   role         text        not null default 'user',
   copies_today int         not null default 0,
   last_copy_date date,
-  -- beta: unlocks all categories. Self-claimed by visiting the beta link while
-  -- logged in (the "Profiles: update own" policy permits the user to set it).
-  beta         boolean     not null default false,
   created_at   timestamptz not null default now()
 );
--- Backfill for databases created before the beta column existed.
-alter table public.profiles add column if not exists beta boolean not null default false;
+-- beta: REMOVED. Every category is now open to all users, so the flag was
+-- dropped. (Self-claim relied on the open update grant, which is now locked
+-- down — see the column-scoped grants below.)
+alter table public.profiles drop column if exists beta;
+-- email: mirrored from auth.users so the analytics page can show a user's email
+-- without an admin.auth API call per row. Populated by handle_new_user on signup
+-- and kept here for existing rows via the backfill below.
+alter table public.profiles add column if not exists email text;
 
 create table if not exists public.components (
   id           uuid primary key default gen_random_uuid(),
@@ -130,7 +133,7 @@ security definer
 set search_path = public
 as $$
 begin
-  insert into public.profiles (id, full_name, avatar_url)
+  insert into public.profiles (id, full_name, avatar_url, email)
   values (
     new.id,
     coalesce(
@@ -140,7 +143,8 @@ begin
     coalesce(
       new.raw_user_meta_data ->> 'avatar_url',
       new.raw_user_meta_data ->> 'picture'
-    )
+    ),
+    new.email
   )
   on conflict (id) do nothing;
   return new;
@@ -152,6 +156,14 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row
   execute function public.handle_new_user();
+
+-- One-time backfill of profiles.email from auth.users for rows created before the
+-- email column existed. Idempotent; re-running only touches rows that drifted.
+update public.profiles p
+set email = u.email
+from auth.users u
+where u.id = p.id
+  and p.email is distinct from u.email;
 
 -- -----------------------------------------------------------------------------
 -- Copy-count trigger: bump components.copy_count on every copy_events insert.
@@ -189,8 +201,16 @@ create trigger on_copy_event_inserted
 grant usage on schema public to anon, authenticated;
 
 -- profiles: a logged-in user manages only their own row (RLS scopes it to
--- auth.uid()). anon needs no access.
-grant select, insert, update on public.profiles to authenticated;
+-- auth.uid()). anon needs no access. Writes are COLUMN-SCOPED so a user can set
+-- only their name/avatar — NOT role (blocks self-promotion to admin), email, or
+-- the copy counters. copies_today / last_copy_date are maintained by record_copy
+-- (SECURITY DEFINER, bypasses these grants); email is mirrored by the signup
+-- trigger. Without the column scope the open "update own" policy below would let
+-- any user run `update profiles set role='admin'` on their own row.
+revoke insert, update on public.profiles from authenticated;
+grant select on public.profiles to authenticated;
+grant insert (id, full_name, avatar_url) on public.profiles to authenticated;
+grant update (full_name, avatar_url) on public.profiles to authenticated;
 
 -- components: everyone may read (published-only via RLS); writes are admin-only
 -- (gated by the policies below). figma_data is DELIBERATELY excluded from the
@@ -245,6 +265,32 @@ create policy "Profiles: update own"
   for update
   using (auth.uid() = id)
   with check (auth.uid() = id);
+
+-- Backstop against role self-promotion. The column-scoped update grant above is
+-- the primary block (a user has no UPDATE privilege on `role`); this trigger
+-- rejects any role change from an API user session even if that grant is ever
+-- loosened. NOT security definer, so current_user is the real caller:
+-- 'authenticated'/'anon' = blocked; 'postgres' (dashboard SQL) and
+-- 'service_role' (admin scripts / SECURITY DEFINER fns) pass through, so admins
+-- can still set roles manually.
+create or replace function public.prevent_role_self_change()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.role is distinct from old.role
+     and current_user in ('authenticated', 'anon') then
+    raise exception 'not allowed to change role';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_block_role_change on public.profiles;
+create trigger profiles_block_role_change
+  before update on public.profiles
+  for each row
+  execute function public.prevent_role_self_change();
 
 -- components: anyone (incl. anon) may read published rows.
 drop policy if exists "Components: read published" on public.components;
@@ -653,3 +699,150 @@ $$;
 -- anon callers — a figma_data leak. Color search is now fully client-side, so
 -- the RPC is dropped entirely.
 drop function if exists public.search_by_color(text, int);
+
+-- =============================================================================
+-- Analytics RPCs (admin-only, called via the service-role client which bypasses
+-- RLS). They aggregate inside Postgres so the analytics page never pulls raw
+-- event rows to JS.
+-- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- get_per_user_activity(activity_date date)
+-- Per-user copy activity for a single IST day: one row per user who copied that
+-- day, with their copy count and the list of components they copied (most
+-- recent first). Powers the "Per-user activity" table.
+-- ---------------------------------------------------------------------------
+create or replace function public.get_per_user_activity(activity_date date)
+returns table (
+  user_id       uuid,
+  copies_count  bigint,
+  component_ids uuid[]
+)
+language sql
+stable
+as $$
+  select
+    ce.user_id,
+    count(*) as copies_count,
+    array_agg(ce.component_id order by ce.copied_at desc) as component_ids
+  from public.copy_events ce
+  where ce.date = activity_date
+    and ce.user_id is not null
+  group by ce.user_id
+  order by count(*) desc;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- get_analytics_windows(d_today, d_start7, d_date)
+-- All KPI windows in a single round trip. Returns a JSON object keyed by window
+-- ('today', '7d', 'all', and 'date' when d_date is non-null); each value holds
+-- totalCopies, uniqueCopiers, totalLogins, uniqueLogins, newAccounts and a
+-- byCategory map. Every metric is computed in-DB — no event rows leave Postgres.
+--
+-- Window date ranges (on the events' `date` column, already IST day-stamped):
+--   today → [d_today, d_today]   7d → [d_start7, d_today]   all → (… , d_today]
+--   date  → [d_date, d_date]     (only when d_date is not null)
+-- newAccounts uses profiles.created_at converted to the IST calendar day.
+-- ---------------------------------------------------------------------------
+create or replace function public.get_analytics_windows(
+  d_today  date,
+  d_start7 date,
+  d_date   date default null
+)
+returns jsonb
+language plpgsql
+stable
+as $$
+declare
+  result jsonb;
+begin
+  with
+  -- Copies, all windows in one pass (every window ⊆ date <= d_today).
+  ca as (
+    select
+      count(*)                   filter (where ce.date = d_today)                   as t_total,
+      count(distinct ce.user_id) filter (where ce.date = d_today)                   as t_uniq,
+      count(*)                   filter (where ce.date between d_start7 and d_today) as w_total,
+      count(distinct ce.user_id) filter (where ce.date between d_start7 and d_today) as w_uniq,
+      count(*)                                                                       as a_total,
+      count(distinct ce.user_id)                                                     as a_uniq,
+      count(*)                   filter (where d_date is not null and ce.date = d_date) as d_total,
+      count(distinct ce.user_id) filter (where d_date is not null and ce.date = d_date) as d_uniq
+    from public.copy_events ce
+    where ce.date <= d_today
+  ),
+  -- Logins, same window shape.
+  la as (
+    select
+      count(*)                   filter (where le.date = d_today)                   as t_total,
+      count(distinct le.user_id) filter (where le.date = d_today)                   as t_uniq,
+      count(*)                   filter (where le.date between d_start7 and d_today) as w_total,
+      count(distinct le.user_id) filter (where le.date between d_start7 and d_today) as w_uniq,
+      count(*)                                                                       as a_total,
+      count(distinct le.user_id)                                                     as a_uniq,
+      count(*)                   filter (where d_date is not null and le.date = d_date) as d_total,
+      count(distinct le.user_id) filter (where d_date is not null and le.date = d_date) as d_uniq
+    from public.login_events le
+    where le.date <= d_today
+  ),
+  -- New accounts by IST signup day.
+  pa as (
+    select
+      count(*) filter (where d::date = d_today)                   as t_new,
+      count(*) filter (where d::date between d_start7 and d_today) as w_new,
+      count(*)                                                     as a_new,
+      count(*) filter (where d_date is not null and d::date = d_date) as d_new
+    from (
+      select (p.created_at at time zone 'Asia/Kolkata') as d
+      from public.profiles p
+    ) s
+  ),
+  -- Copies grouped by category, per window (null categories dropped at build).
+  cat as (
+    select
+      c.category,
+      count(*) filter (where ce.date = d_today)                   as t_c,
+      count(*) filter (where ce.date between d_start7 and d_today) as w_c,
+      count(*)                                                     as a_c,
+      count(*) filter (where d_date is not null and ce.date = d_date) as d_c
+    from public.copy_events ce
+    join public.components c on c.id = ce.component_id
+    where ce.date <= d_today
+    group by c.category
+  )
+  select jsonb_build_object(
+    'today', jsonb_build_object(
+      'totalCopies', ca.t_total, 'uniqueCopiers', ca.t_uniq,
+      'totalLogins', la.t_total, 'uniqueLogins', la.t_uniq,
+      'newAccounts', pa.t_new,
+      'byCategory', (select coalesce(jsonb_object_agg(category, t_c)
+                            filter (where category is not null), '{}'::jsonb) from cat)
+    ),
+    '7d', jsonb_build_object(
+      'totalCopies', ca.w_total, 'uniqueCopiers', ca.w_uniq,
+      'totalLogins', la.w_total, 'uniqueLogins', la.w_uniq,
+      'newAccounts', pa.w_new,
+      'byCategory', (select coalesce(jsonb_object_agg(category, w_c)
+                            filter (where category is not null), '{}'::jsonb) from cat)
+    ),
+    'all', jsonb_build_object(
+      'totalCopies', ca.a_total, 'uniqueCopiers', ca.a_uniq,
+      'totalLogins', la.a_total, 'uniqueLogins', la.a_uniq,
+      'newAccounts', pa.a_new,
+      'byCategory', (select coalesce(jsonb_object_agg(category, a_c)
+                            filter (where category is not null), '{}'::jsonb) from cat)
+    ),
+    'date', case when d_date is null then null else jsonb_build_object(
+      'totalCopies', ca.d_total, 'uniqueCopiers', ca.d_uniq,
+      'totalLogins', la.d_total, 'uniqueLogins', la.d_uniq,
+      'newAccounts', pa.d_new,
+      'byCategory', (select coalesce(jsonb_object_agg(category, d_c)
+                            filter (where category is not null), '{}'::jsonb) from cat)
+    ) end
+  )
+  into result
+  from ca, la, pa;
+
+  return result;
+end;
+$$;

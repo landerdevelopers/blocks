@@ -21,9 +21,6 @@ export type Profile = {
   copies_today: number;
   last_copy_date: string | null;
   created_at: string;
-  // Beta access — set true when the user claims the beta link while logged in.
-  // Unlocks all categories (read access), following the account across devices.
-  beta?: boolean;
 };
 
 // Minimal component shape the gallery renders.
@@ -165,7 +162,6 @@ export const useAuthStore = create<AuthState>()(
     {
       name: "auth-store",
       // Only profile + isAdmin persist; transient state always starts fresh.
-      // (Beta lives on profile.beta, so it persists with the profile.)
       partialize: (state) => ({
         profile: state.profile,
         isAdmin: state.isAdmin,

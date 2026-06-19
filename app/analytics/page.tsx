@@ -1,3 +1,4 @@
+import { unstable_cache } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { todayIST } from "@/lib/ist";
 import AnalyticsView, {
@@ -20,9 +21,10 @@ const CATEGORIES = [
 // this route to profiles.role = 'admin', so the page itself just reads. All
 // reads use the service-role client, which bypasses RLS to see every user's
 // rows — that key is server-only and never reaches the browser.
-export const dynamic = "force-dynamic";
-
-const EPOCH = "1970-01-01";
+//
+// Not force-dynamic: the heavy window aggregates are wrapped in unstable_cache
+// (60s) so repeat loads skip the all-time scans. The ?date view and per-user
+// table are computed live each request.
 
 // Shift a "YYYY-MM-DD" string by `delta` days (UTC math on the calendar date).
 function addDays(ymd: string, delta: number): string {
@@ -33,6 +35,75 @@ function addDays(ymd: string, delta: number): string {
 }
 
 type RawPerUser = { uid: string; count: number; components: string[] };
+
+// One window object as returned by the get_analytics_windows RPC.
+type RawWindow = {
+  totalCopies: number;
+  uniqueCopiers: number;
+  totalLogins: number;
+  uniqueLogins: number;
+  newAccounts: number;
+  byCategory: Record<string, number> | null;
+};
+
+// Normalize an RPC window into the Stats shape, filling every category with 0
+// so the view always has all five keys. Counts arrive as JSON numbers.
+function toStats(w: RawWindow | null | undefined): Stats {
+  const byCategory: Record<string, number> = Object.fromEntries(
+    CATEGORIES.map((c) => [c, 0]),
+  );
+  for (const [k, v] of Object.entries(w?.byCategory ?? {})) {
+    if (k in byCategory) byCategory[k] = Number(v);
+  }
+  return {
+    totalCopies: Number(w?.totalCopies ?? 0),
+    uniqueCopiers: Number(w?.uniqueCopiers ?? 0),
+    totalLogins: Number(w?.totalLogins ?? 0),
+    uniqueLogins: Number(w?.uniqueLogins ?? 0),
+    newAccounts: Number(w?.newAccounts ?? 0),
+    byCategory,
+  };
+}
+
+// Tab stats (today / 7d / all), top components, and lander count don't depend on
+// the ?date param, so they're cached together for 60s — one RPC + two cheap
+// reads, shared across loads. Keyed by `today` so the cache rolls over at the
+// IST date boundary.
+const getCachedOverview = unstable_cache(
+  async (today: string, start7: string) => {
+    const admin = createAdminClient();
+    const [windowsRes, top10Res, landerRes] = await Promise.all([
+      admin.rpc("get_analytics_windows", {
+        d_today: today,
+        d_start7: start7,
+      }),
+      admin
+        .from("components")
+        .select("id, category, copy_count, preview_url")
+        .order("copy_count", { ascending: false })
+        .limit(10),
+      admin.from("lander_clicks").select("*", { count: "exact", head: true }),
+    ]);
+    const w = (windowsRes.data ?? {}) as Record<string, RawWindow | null>;
+    const topComponents: TopComponent[] = (top10Res.data ?? []).map((c) => ({
+      id: c.id as string,
+      category: (c.category as string) ?? "—",
+      copy_count: (c.copy_count as number) ?? 0,
+      preview_url: (c.preview_url as string) ?? null,
+    }));
+    return {
+      stats: {
+        today: toStats(w.today),
+        "7d": toStats(w["7d"]),
+        all: toStats(w.all),
+      },
+      topComponents,
+      landerClicks: landerRes.count ?? 0,
+    };
+  },
+  ["analytics-overview"],
+  { revalidate: 60 },
+);
 
 export default async function AnalyticsPage({
   searchParams,
@@ -52,53 +123,6 @@ export default async function AnalyticsPage({
 
   const admin = createAdminClient();
 
-  // Stats for a [start, end] IST day window. Four parallel queries: copies
-  // (count + user_ids for unique), logins (same), new accounts (count), and
-  // copies-by-category (DB aggregation RPC — no raw rows pulled to JS).
-  const statsFor = async (start: string, end: string): Promise<Stats> => {
-    const createdFrom = `${start}T00:00:00+05:30`;
-    const createdTo = `${addDays(end, 1)}T00:00:00+05:30`;
-    const [copyRes, loginRes, acctRes, catRes] = await Promise.all([
-      admin
-        .from("copy_events")
-        .select("user_id", { count: "exact" })
-        .gte("date", start)
-        .lte("date", end)
-        .limit(100000),
-      admin
-        .from("login_events")
-        .select("user_id", { count: "exact" })
-        .gte("date", start)
-        .lte("date", end)
-        .limit(100000),
-      admin
-        .from("profiles")
-        .select("*", { count: "exact", head: true })
-        .gte("created_at", createdFrom)
-        .lt("created_at", createdTo),
-      admin.rpc("get_copies_by_category", {
-        start_date: start,
-        end_date: end,
-      }),
-    ]);
-    const byCategory: Record<string, number> = Object.fromEntries(
-      CATEGORIES.map((c) => [c, 0]),
-    );
-    for (const r of (catRes.data as
-      | { category: string; copies_count: number }[]
-      | null) ?? []) {
-      if (r.category in byCategory) byCategory[r.category] = Number(r.copies_count);
-    }
-    return {
-      totalCopies: copyRes.count ?? 0,
-      uniqueCopiers: new Set((copyRes.data ?? []).map((r) => r.user_id)).size,
-      totalLogins: loginRes.count ?? 0,
-      uniqueLogins: new Set((loginRes.data ?? []).map((r) => r.user_id)).size,
-      newAccounts: acctRes.count ?? 0,
-      byCategory,
-    };
-  };
-
   // Per-user activity for one day, pre-aggregated by the RPC (no raw rows).
   const perUserFor = async (day: string): Promise<RawPerUser[]> => {
     const { data } = await admin.rpc("get_per_user_activity", {
@@ -113,80 +137,77 @@ export default async function AnalyticsPage({
     }));
   };
 
-  // Emails from auth.users — paginate so >1000 accounts are fully covered.
-  const fetchAllEmails = async (): Promise<Record<string, string>> => {
-    const map: Record<string, string> = {};
-    let page = 1;
-    for (;;) {
-      const { data } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
-      if (!data?.users?.length) break;
-      data.users.forEach((u) => {
-        map[u.id] = u.email || "";
-      });
-      if (data.users.length < 1000) break;
-      page++;
-    }
-    return map;
-  };
-
-  // Everything that doesn't depend on another query — fired in one wave.
-  const [
-    statToday,
-    stat7d,
-    statAll,
-    statDate,
-    top10Res,
-    compCatRes,
-    landerRes,
-    rawToday,
-    rawDate,
-    namesRes,
-    emailMap,
-  ] = await Promise.all([
-    statsFor(today, today),
-    statsFor(start7, today),
-    statsFor(EPOCH, today),
-    datePick ? statsFor(datePick, datePick) : Promise.resolve(null),
-    admin
-      .from("components")
-      .select("id, category, copy_count, preview_url")
-      .order("copy_count", { ascending: false })
-      .limit(10),
-    admin.from("components").select("id, category").limit(100000),
-    admin.from("lander_clicks").select("*", { count: "exact", head: true }),
+  // First wave: cached tab overview + (live) date-window stats + per-user rows.
+  // The date view is uncached since it's an arbitrary, rarely repeated param.
+  const [overview, dateRes, rawToday, rawDate] = await Promise.all([
+    getCachedOverview(today, start7),
+    datePick
+      ? admin.rpc("get_analytics_windows", {
+          d_today: today,
+          d_start7: start7,
+          d_date: datePick,
+        })
+      : Promise.resolve(null),
     perUserFor(today),
     datePick ? perUserFor(datePick) : Promise.resolve(null),
-    admin.from("profiles").select("id, full_name").limit(10000),
-    fetchAllEmails(),
   ]);
 
-  const nameMap = new Map<string, string>(
-    (namesRes.data ?? []).map((p) => [
-      p.id as string,
-      (p.full_name as string) ?? "—",
-    ]),
-  );
+  const statDate = dateRes
+    ? toStats((dateRes.data as Record<string, RawWindow | null>)?.date)
+    : null;
 
-  // Latest login per active user (union of today + date views) — second wave,
-  // since it depends on which user ids the per-user RPCs returned.
+  // Second wave: only the names/emails/logins/categories for the users and
+  // components actually shown in the per-user table — scoped by id, not full
+  // table scans. Depends on which uids/components the per-user RPCs returned.
   const allUids = [
     ...new Set([
       ...rawToday.map((r) => r.uid),
       ...(rawDate ?? []).map((r) => r.uid),
     ]),
   ];
-  const lastLoginMap: Record<string, string> = {};
-  if (allUids.length) {
-    const { data: logins } = await admin
-      .from("login_events")
-      .select("user_id, logged_in_at")
-      .in("user_id", allUids)
-      .order("logged_in_at", { ascending: false });
-    for (const l of logins ?? []) {
-      const uid = l.user_id as string;
-      if (!lastLoginMap[uid]) lastLoginMap[uid] = l.logged_in_at as string;
-    }
+  const shownCompIds = [
+    ...new Set([
+      ...rawToday.flatMap((r) => r.components),
+      ...(rawDate ?? []).flatMap((r) => r.components),
+    ]),
+  ];
+
+  const [profRes, loginRes, compRes] = await Promise.all([
+    allUids.length
+      ? admin.from("profiles").select("id, full_name, email").in("id", allUids)
+      : Promise.resolve({ data: [] as { id: string; full_name: string | null; email: string | null }[] }),
+    allUids.length
+      ? admin
+          .from("login_events")
+          .select("user_id, logged_in_at")
+          .in("user_id", allUids)
+          .order("logged_in_at", { ascending: false })
+      : Promise.resolve({ data: [] as { user_id: string; logged_in_at: string }[] }),
+    shownCompIds.length
+      ? admin.from("components").select("id, category").in("id", shownCompIds)
+      : Promise.resolve({ data: [] as { id: string; category: string | null }[] }),
+  ]);
+
+  const nameMap = new Map<string, string>();
+  const emailMap: Record<string, string> = {};
+  for (const p of profRes.data ?? []) {
+    nameMap.set(p.id as string, (p.full_name as string) ?? "—");
+    emailMap[p.id as string] = (p.email as string) || "";
   }
+
+  // Latest login per shown user (rows already sorted newest-first).
+  const lastLoginMap: Record<string, string> = {};
+  for (const l of loginRes.data ?? []) {
+    const uid = l.user_id as string;
+    if (!lastLoginMap[uid]) lastLoginMap[uid] = l.logged_in_at as string;
+  }
+
+  const categoryById: Record<string, string> = Object.fromEntries(
+    (compRes.data ?? []).map((c) => [
+      c.id as string,
+      (c.category as string) ?? "—",
+    ]),
+  );
 
   const enrich = (rows: RawPerUser[]): PerUserRow[] =>
     rows.map((r) => ({
@@ -198,26 +219,18 @@ export default async function AnalyticsPage({
       lastLogin: lastLoginMap[r.uid] ?? null,
     }));
 
-  const topComponents: TopComponent[] = (top10Res.data ?? []).map((c) => ({
-    id: c.id as string,
-    category: (c.category as string) ?? "—",
-    copy_count: (c.copy_count as number) ?? 0,
-    preview_url: (c.preview_url as string) ?? null,
-  }));
-  const categoryById: Record<string, string> = Object.fromEntries(
-    (compCatRes.data ?? []).map((c) => [
-      c.id as string,
-      (c.category as string) ?? "—",
-    ]),
-  );
-
   return (
     <AnalyticsView
       today={today}
       initialDate={datePick}
-      stats={{ today: statToday, "7d": stat7d, all: statAll, date: statDate }}
-      topComponents={topComponents}
-      landerClicks={landerRes.count ?? 0}
+      stats={{
+        today: overview.stats.today,
+        "7d": overview.stats["7d"],
+        all: overview.stats.all,
+        date: statDate,
+      }}
+      topComponents={overview.topComponents}
+      landerClicks={overview.landerClicks}
       perUser={{ tabs: enrich(rawToday), date: rawDate ? enrich(rawDate) : null }}
       categoryById={categoryById}
     />
