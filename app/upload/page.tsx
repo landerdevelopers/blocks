@@ -1,12 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import UploadForm from "@/components/UploadForm";
 import { useAuthStore } from "@/store/authStore";
 
 export default function UploadPage() {
-  const router = useRouter();
   const [uploaded, setUploaded] = useState(false);
   // Admins publish curated gallery content; everyone else here is a creator
   // (middleware only lets admins + creators in) → submit as a pending review.
@@ -34,13 +33,13 @@ export default function UploadPage() {
           <div className="mt-2 flex items-center gap-2.5">
             {/* Creators (ownerMode) get a quick path back to their portal. */}
             {ownerMode && username && (
-              <button
-                type="button"
-                onClick={() => router.push(`/creators/${username}`)}
+              <Link
+                href={`/creators/${username}`}
+                prefetch
                 className="flex items-center justify-center rounded-xl border border-[#e7e9ee] bg-white px-5 py-2.5 text-sm font-medium tracking-[-0.03em] text-[#52525b] transition-colors hover:bg-[#f0f0f0]"
               >
                 Go Back
-              </button>
+              </Link>
             )}
             <button
               type="button"

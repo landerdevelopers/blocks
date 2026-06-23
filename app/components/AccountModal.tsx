@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { createPortal } from "react-dom";
 import { ExternalLink } from "lucide-react";
 import { ScrollFadeEffect } from "@/components/scroll-fade-effect";
@@ -26,7 +26,6 @@ export default function AccountModal({
   // Generate/resolve the user's creator handle and navigate to their page.
   onBecomeCreator?: () => void;
 }) {
-  const router = useRouter();
   const profile = useAuthStore((s) => s.profile);
   const email = useAuthStore((s) => s.email);
   const setProfile = useAuthStore((s) => s.setProfile);
@@ -237,20 +236,18 @@ export default function AccountModal({
         {!unlimited && resetTimer}
 
         {isCreator ? (
-          // Open Creator Portal
-          <button
-            type="button"
-            onClick={() => {
-              if (profile?.username) {
-                onClose();
-                router.push(`/creators/${profile.username}`);
-              }
-            }}
+          // Open Creator Portal — Link (not router.push) so Next prefetches the
+          // portal route + its loading skeleton while the modal is open; the
+          // click then transitions instantly instead of waiting on a cold RSC.
+          <Link
+            href={profile?.username ? `/creators/${profile.username}` : "#"}
+            prefetch
+            onClick={onClose}
             className="flex min-h-[36px] w-full cursor-pointer items-center justify-center gap-2 rounded-[10px] bg-[#f5f5f5] px-4 py-2 text-[14px] tracking-[-0.03em] text-[#171717] transition-colors hover:bg-[#ececec]"
           >
             <ExternalLink size={16} strokeWidth={1.5} />
             Open Creator Portal
-          </button>
+          </Link>
         ) : (
           // Become Creator — hidden while an application is in review, and while
           // the pending-check is still loading (avoids a flash).

@@ -314,7 +314,8 @@ export default function UploadForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const pasteCleanup = useRef<(() => void) | null>(null);
+  // Focusable target that captures the Figma paste (see pasteFigmaSection).
+  const pasteBoxRef = useRef<HTMLDivElement>(null);
 
   // A local object URL for previewing a freshly-picked file.
   const filePreview = file ? URL.createObjectURL(file) : null;
@@ -325,40 +326,38 @@ export default function UploadForm({
   }, [filePreview]);
   const previewSrc = filePreview ?? existingPreview;
 
-  // Wait for the user's own Ctrl+V (native paste event — no clipboard-read
-  // permission needed). Stores the Figma component HTML fragment. Esc cancels.
-  const pasteFigmaSection = () => {
-    setPasteWaiting(true);
-    const cleanup = () => {
-      setPasteWaiting(false);
-      document.removeEventListener("paste", onPaste);
-      document.removeEventListener("keydown", onKey);
-      pasteCleanup.current = null;
-    };
-    const onPaste = (e: ClipboardEvent) => {
-      e.preventDefault();
-      const html = e.clipboardData?.getData("text/html") ?? "";
-      // Figma embeds its payload in `<!--(figma)…-->` / `<!--(figmeta)…-->`
-      // comments — present on Windows AND macOS. The old check looked for
-      // `<!--StartFragment-->`, which is a Windows-only CF_HTML wrapper and is
-      // absent on macOS, so paste always failed there. `StartFragment` is kept
-      // only as a legacy fallback.
-      const isFigma =
-        /<!--\(figm/i.test(html) || html.includes("<!--StartFragment-->");
-      if (isFigma) {
-        setFigmaData(html);
-      } else {
-        setPasteError(true);
-      }
-      cleanup();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cleanup();
-    };
-    pasteCleanup.current = cleanup;
-    document.addEventListener("paste", onPaste);
-    document.addEventListener("keydown", onKey);
+  // Arm the paste capture. The actual paste is read off a FOCUSED contenteditable
+  // box (rendered below). Using a focused editable target — not a document-level
+  // listener — is what makes right-click → Paste work: the browser's context-menu
+  // Paste only dispatches a `paste` event to a focused editable element, while a
+  // keyboard ⌘/Ctrl+V would reach the document. The box handles both.
+  const pasteFigmaSection = () => setPasteWaiting(true);
+
+  // Read the pasted clipboard (keyboard OR right-click paste) off the box.
+  const handleFigmaPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const html = e.clipboardData?.getData("text/html") ?? "";
+    // Figma embeds its payload in `<!--(figma)…-->` / `<!--(figmeta)…-->`
+    // comments — present on Windows AND macOS. `<!--StartFragment-->` is a
+    // Windows-only CF_HTML wrapper, kept only as a legacy fallback.
+    const isFigma =
+      /<!--\(figm/i.test(html) || html.includes("<!--StartFragment-->");
+    if (isFigma) setFigmaData(html);
+    else setPasteError(true);
+    setPasteWaiting(false);
   };
+
+  // While waiting: focus the capture box (so a keyboard paste lands there) and
+  // let Esc cancel.
+  useEffect(() => {
+    if (!pasteWaiting) return;
+    pasteBoxRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPasteWaiting(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [pasteWaiting]);
 
   // Copy the stored Figma component back to the clipboard (execCommand → no
   // permission popup).
@@ -626,9 +625,25 @@ export default function UploadForm({
         <FieldLabel>Paste Figma</FieldLabel>
         <div className="flex min-h-[46px] w-full items-center gap-1 rounded-lg border border-[#e4e4e7] bg-white px-[7px] py-1.5">
           {pasteWaiting ? (
-            <span className="flex-1 border border-transparent px-1 py-1.5 text-center text-sm font-medium tracking-[-0.03em] text-[#2974ff]">
-              Press ⌘V / Ctrl+V to paste your Figma component
-            </span>
+            <div className="relative flex-1">
+              {/* Focused, editable target: makes right-click → Paste work (the
+                  context-menu Paste only fires on a focused editable element),
+                  alongside keyboard ⌘/Ctrl+V. beforeinput is blocked so typing
+                  can't dirty the box — only the paste handler stores anything. */}
+              <div
+                ref={pasteBoxRef}
+                contentEditable
+                suppressContentEditableWarning
+                role="textbox"
+                aria-label="Paste your Figma component here"
+                onPaste={handleFigmaPaste}
+                onBeforeInput={(e) => e.preventDefault()}
+                className="min-h-[30px] w-full cursor-text rounded-[7px] px-1 py-1.5 text-center text-sm font-medium tracking-[-0.03em] text-[#2974ff] caret-transparent outline-none"
+              />
+              <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm font-medium tracking-[-0.03em] text-[#2974ff]">
+                Right-click → Paste, or press ⌘V / Ctrl+V
+              </span>
+            </div>
           ) : figmaData ? (
             <>
               <button

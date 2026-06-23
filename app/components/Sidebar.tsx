@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { ChevronDown, Plus, Minus, User, LogOut, ChevronsUpDown, Search, CirclePlus, ExternalLink, Globe } from "lucide-react";
 import ColorSearch from "./ColorSearch";
 import { ScrollFadeEffect } from "@/components/scroll-fade-effect";
@@ -349,7 +349,6 @@ export default function Sidebar({
   // Pre-aggregated count badges (server-fetched, server-cached).
   sidebarCounts: SidebarCounts;
 }) {
-  const router = useRouter();
   const profile = useAuthStore((s) => s.profile);
   const authLoading = useAuthStore((s) => s.authLoading);
 
@@ -741,19 +740,21 @@ export default function Sidebar({
                         everyone else gets the Become-a-Creator action. */}
                     {myUsername ? (
                       <div className="flex items-center border-t border-[#e7e9ee] p-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCreatorsOpen(false);
-                            router.push(`/creators/${myUsername}`);
-                          }}
+                        {/* Link (not router.push) so Next prefetches the portal
+                            route + its loading skeleton while the popup is open —
+                            the click then transitions instantly instead of waiting
+                            on a cold serverless RSC fetch (2-3s in prod). */}
+                        <Link
+                          href={`/creators/${myUsername}`}
+                          prefetch
+                          onClick={() => setCreatorsOpen(false)}
                           className="flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-[#ebebeb] bg-white px-2.5 py-1.5 shadow-[0px_1px_1px_rgba(10,13,20,0.03)] transition-colors hover:bg-[#fafafa]"
                         >
                           <ExternalLink size={16} strokeWidth={1.5} className="text-[#71717b]" />
                           <span className="text-base tracking-[-0.03em] text-[#71717b]">
                             Open Creator Portal
                           </span>
-                        </button>
+                        </Link>
                       </div>
                     ) : hasPendingApplication ||
                       wasCreator ||
