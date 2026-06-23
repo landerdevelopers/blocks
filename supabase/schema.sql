@@ -1875,9 +1875,19 @@ as $$
     p.x_handle, p.instagram_handle, p.linkedin_handle, p.website_url, p.cta_url,
     coalesce((
       select count(*) from public.components c2
-      where c2.uploaded_by = p.id
-        and c2.is_published = true and c2.is_private = false
+      where c2.is_published = true and c2.is_private = false
         and c2.status = 'approved'
+        and (
+          -- Admin uploads render as the single "Lander Studio" agency card, so
+          -- its count is the COMBINED total of every admin's uploads (not just
+          -- this admin's). Real creators count only their own.
+          case when p.role = 'admin'
+            then c2.uploaded_by in (
+              select id from public.profiles where role = 'admin'
+            )
+            else c2.uploaded_by = p.id
+          end
+        )
     ), 0) as creator_design_count,
     -- Admin uploads have no real creator profile → the client renders a fixed
     -- "Lander Studio" agency card instead of the admin's personal profile.

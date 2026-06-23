@@ -32,9 +32,18 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const home = NextResponse.redirect(new URL("/", request.url));
+  // Redirect home while CARRYING the auth cookies Supabase just refreshed onto
+  // `response`. A bare NextResponse.redirect drops them, so the browser keeps
+  // the old (already-rotated) refresh token → the next getUser() can't refresh
+  // → null → bounced again, stuck until a full re-login. Copying the cookies
+  // over keeps the session consistent.
+  const home = () => {
+    const redirect = NextResponse.redirect(new URL("/", request.url));
+    response.cookies.getAll().forEach((c) => redirect.cookies.set(c));
+    return redirect;
+  };
 
-  if (!user) return home;
+  if (!user) return home();
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -51,7 +60,7 @@ export async function middleware(request: NextRequest) {
     (role === "creator" &&
       (path.startsWith("/upload") || path.startsWith("/creators")));
 
-  if (!allowed) return home;
+  if (!allowed) return home();
 
   return response;
 }

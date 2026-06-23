@@ -68,11 +68,11 @@ const LANDER: Omit<CreatorDetail, "creator_design_count"> = {
   creator_avatar_url: "/Lander_black.png",
   creator_bio:
     "Design agency crafting standout websites, brands, and product experiences.",
-  creator_x_handle: null,
+  creator_x_handle: "praha37v",
   creator_instagram_handle: null,
   creator_linkedin_handle: "https://www.linkedin.com/company/lander-studio/",
   creator_website_url: "https://lander.studio",
-  creator_cta_url: "https://lander.studio",
+  creator_cta_url: "https://lander.studio/booking",
   is_admin: true,
 };
 
@@ -676,8 +676,8 @@ export default function Gallery({
   // cached creator. Present (non-skeleton) the instant a row is open.
   const detail = useMemo<LightboxDetail | null>(() => {
     if (!lbRow) return null;
-    // Admin uploads → show the fixed Lander Studio card (keep the real
-    // per-uploader design count).
+    // Admin uploads → show the fixed Lander Studio card (its design count is the
+    // combined total of all admin uploads, from get_creator_by_id).
     const c = creator?.is_admin
       ? { ...LANDER, creator_design_count: creator.creator_design_count }
       : creator;
