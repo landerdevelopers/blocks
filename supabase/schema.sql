@@ -2074,3 +2074,42 @@ as $$
   limit 300;
 $$;
 grant execute on function public.search_by_color(text[]) to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Mirror profiles.role into auth.users.raw_app_meta_data so the middleware can
+-- authorize from the JWT (getUser() returns app_metadata, server-fresh) WITHOUT
+-- a second DB round trip per protected navigation — that extra query was what
+-- stalled the creator portal (and its loading skeleton) for 2-3s on cold
+-- serverless. SECURITY DEFINER so it can write the auth schema.
+-- ---------------------------------------------------------------------------
+create or replace function public.sync_role_to_jwt()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op = 'INSERT' or new.role is distinct from old.role then
+    update auth.users
+      set raw_app_meta_data =
+        coalesce(raw_app_meta_data, '{}'::jsonb)
+        || jsonb_build_object('role', new.role)
+      where id = new.id;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_sync_role_to_jwt on public.profiles;
+create trigger profiles_sync_role_to_jwt
+  after insert or update of role on public.profiles
+  for each row
+  execute function public.sync_role_to_jwt();
+
+-- Backfill existing users' app_metadata.role from their current profile role.
+update auth.users u
+  set raw_app_meta_data =
+    coalesce(u.raw_app_meta_data, '{}'::jsonb)
+    || jsonb_build_object('role', p.role)
+  from public.profiles p
+  where p.id = u.id and p.role is not null;

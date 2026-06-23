@@ -102,37 +102,55 @@ export default function AuthProvider({
       setShowOnboarding(true);
     };
 
+    // Fetch the creator-application flags so the "Become a Creator" CTA (account
+    // modal + sidebar) renders instantly. One read for all: pending hides the
+    // CTA while in review; approved hides it for an existing/revoked creator;
+    // rejected-within-7-days keeps it hidden during the cooldown.
+    const loadCreatorFlags = (userId: string) => {
+      supabase
+        .from("creator_applications")
+        .select("status, reviewed_at")
+        .eq("user_id", userId)
+        .then(({ data }) => {
+          const rows =
+            (data as { status: string; reviewed_at: string | null }[] | null) ??
+            [];
+          setPendingCreatorApp(rows.some((r) => r.status === "pending"));
+          setWasCreator(rows.some((r) => r.status === "approved"));
+          const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+          setCreatorRejectedRecently(
+            rows.some(
+              (r) =>
+                r.status === "rejected" &&
+                !!r.reviewed_at &&
+                new Date(r.reviewed_at).getTime() > weekAgo,
+            ),
+          );
+        });
+    };
+
+    // Re-pull profile + flags when the tab regains focus. Lets an applicant who
+    // got approved (or a creator whose access changed) in another tab/admin pick
+    // up their new role + CTA state without a manual reload.
+    const refreshOnFocus = async () => {
+      if (document.visibilityState !== "visible") return;
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+      loadProfile(user.id);
+      loadCreatorFlags(user.id);
+    };
+    document.addEventListener("visibilitychange", refreshOnFocus);
+    window.addEventListener("focus", refreshOnFocus);
+
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       // First resolution of auth state — unblocks the homepage gate.
       setAuthLoading(false);
       if (session?.user) {
         setEmail(session.user.email ?? null);
         loadProfile(session.user.id);
-        // Prefetch the application flags so the "Become a Creator" CTA (account
-        // modal + sidebar) renders instantly, not 1-2s after open. One read for
-        // both: pending hides the CTA while in review; approved hides it for an
-        // existing/revoked creator (so a revoked creator isn't re-prompted).
-        supabase
-          .from("creator_applications")
-          .select("status, reviewed_at")
-          .eq("user_id", session.user.id)
-          .then(({ data }) => {
-            const rows =
-              (data as { status: string; reviewed_at: string | null }[] | null) ??
-              [];
-            setPendingCreatorApp(rows.some((r) => r.status === "pending"));
-            setWasCreator(rows.some((r) => r.status === "approved"));
-            // Rejected within the last 7 days → still in cooldown.
-            const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-            setCreatorRejectedRecently(
-              rows.some(
-                (r) =>
-                  r.status === "rejected" &&
-                  !!r.reviewed_at &&
-                  new Date(r.reviewed_at).getTime() > weekAgo,
-              ),
-            );
-          });
+        loadCreatorFlags(session.user.id);
         // Log a login on an actual sign-in (not INITIAL_SESSION / refresh).
         // Fire-and-forget — analytics-only, must never block auth. Upsert with
         // ignoreDuplicates → at most one row per user per IST day (dedup via the
@@ -157,7 +175,11 @@ export default function AuthProvider({
       }
     });
 
-    return () => sub.subscription.unsubscribe();
+    return () => {
+      sub.subscription.unsubscribe();
+      document.removeEventListener("visibilitychange", refreshOnFocus);
+      window.removeEventListener("focus", refreshOnFocus);
+    };
   }, [
     setProfile,
     setEmail,

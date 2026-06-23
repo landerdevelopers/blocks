@@ -347,11 +347,22 @@ export default function UploadForm({
     setPasteWaiting(false);
   };
 
-  // While waiting: focus the capture box (so a keyboard paste lands there) and
-  // let Esc cancel.
+  // While waiting: focus the capture box AND drop a collapsed selection inside
+  // it. On macOS an empty, merely-focused contenteditable has no selection
+  // range, so the right-click context menu shows "Paste" greyed out — placing a
+  // caret inside enables it. Esc cancels.
   useEffect(() => {
     if (!pasteWaiting) return;
-    pasteBoxRef.current?.focus();
+    const el = pasteBoxRef.current;
+    if (el) {
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setPasteWaiting(false);
     };
@@ -359,11 +370,30 @@ export default function UploadForm({
     return () => document.removeEventListener("keydown", onKey);
   }, [pasteWaiting]);
 
-  // Copy the stored Figma component back to the clipboard (execCommand → no
-  // permission popup).
-  const copyFigmaData = () => {
+  // Copy the stored Figma component back to the clipboard so it can be pasted
+  // straight into Figma. Prefer the async Clipboard API (reliable on macOS,
+  // writes a real text/html item Figma recognizes); fall back to the
+  // copy-event + execCommand path where it's unavailable.
+  const copyFigmaData = async () => {
     if (!figmaData) return;
     const html = figmaData;
+    const done = () => {
+      setFigmaCopied(true);
+      setTimeout(() => setFigmaCopied(false), 1500);
+    };
+    try {
+      if (navigator.clipboard && typeof ClipboardItem !== "undefined") {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/html": new Blob([html], { type: "text/html" }),
+          }),
+        ]);
+        done();
+        return;
+      }
+    } catch {
+      // Permission/availability issue — fall through to execCommand.
+    }
     const listener = (e: ClipboardEvent) => {
       e.clipboardData?.setData("text/html", html);
       e.preventDefault();
@@ -371,8 +401,7 @@ export default function UploadForm({
     document.addEventListener("copy", listener);
     document.execCommand("copy");
     document.removeEventListener("copy", listener);
-    setFigmaCopied(true);
-    setTimeout(() => setFigmaCopied(false), 1500);
+    done();
   };
 
   const { sections, filters: filterOpts } = CONFIG[category];
@@ -637,7 +666,12 @@ export default function UploadForm({
                 role="textbox"
                 aria-label="Paste your Figma component here"
                 onPaste={handleFigmaPaste}
-                onBeforeInput={(e) => e.preventDefault()}
+                onBeforeInput={(e) => {
+                  // Block typing, but NEVER block a paste — some browsers route
+                  // paste through beforeinput (insertFromPaste); let onPaste own it.
+                  const t = (e.nativeEvent as InputEvent).inputType;
+                  if (t !== "insertFromPaste") e.preventDefault();
+                }}
                 className="min-h-[30px] w-full cursor-text rounded-[7px] px-1 py-1.5 text-center text-sm font-medium tracking-[-0.03em] text-[#2974ff] caret-transparent outline-none"
               />
               <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm font-medium tracking-[-0.03em] text-[#2974ff]">

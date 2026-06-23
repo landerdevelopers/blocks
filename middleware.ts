@@ -1,9 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-// Protects /upload and /analytics: only authenticated users whose
-// profiles.role = 'admin' may reach them. Everyone else is redirected to /.
-// Role is checked server-side here.
+// Gates the creator/admin routes server-side. /upload and /creators are open to
+// creators and admins; /analytics and /admin are admin-only. Everyone else is
+// redirected to /. Role comes from the JWT app_metadata (fast, no DB round trip)
+// with a profiles fallback.
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
 
@@ -45,15 +46,24 @@ export async function middleware(request: NextRequest) {
 
   if (!user) return home();
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
+  // Role from the JWT app_metadata — getUser() already returns it (server-fresh,
+  // synced from profiles.role by a DB trigger), so the common case needs NO
+  // extra DB round trip. That second sequential query was what blocked the
+  // response (incl. the loading skeleton) for 2-3s on cold serverless. Fall back
+  // to a profiles read only when the claim is absent (e.g. a user predating the
+  // sync), so access stays correct.
+  let role = (user.app_metadata as { role?: string } | undefined)?.role;
+  if (role !== "admin" && role !== "creator") {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .single();
+    role = profile?.role ?? role;
+  }
 
-  const role = profile?.role;
   const path = request.nextUrl.pathname;
-  // /upload and /creators are open to admins and creators; everything else
+  // /upload and /creators are open to admins and creators; everything else here
   // (/analytics, /admin) is admin-only.
   const allowed =
     role === "admin" ||
