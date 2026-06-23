@@ -880,7 +880,7 @@ create policy "Components: owner delete own"
   using (uploaded_by = auth.uid());
 
 -- ---------------------------------------------------------------------------
--- Upload rate limit: a creator may insert at most 25 components per IST day.
+-- Upload rate limit: a creator may insert at most 30 components per IST day.
 -- Enforced in a BEFORE INSERT trigger (not the client) so it can't be bypassed.
 -- Admins are exempt. The raised message surfaces to the UploadForm.
 -- ---------------------------------------------------------------------------
@@ -905,8 +905,8 @@ begin
   where uploaded_by = new.uploaded_by
     and (created_at at time zone 'Asia/Kolkata')::date
         = (now() at time zone 'Asia/Kolkata')::date;
-  if today_count >= 25 then
-    raise exception 'Only 25 components allowed per day';
+  if today_count >= 30 then
+    raise exception 'Only 30 components allowed per day';
   end if;
   return new;
 end;
@@ -1085,6 +1085,13 @@ alter table public.creator_applications
   add column if not exists status text not null default 'pending';
 alter table public.creator_applications
   add column if not exists reason text;
+-- When an admin approved/rejected the application (drives the 7-day re-apply
+-- cooldown after a rejection) and the admin's rejection feedback (emailed to
+-- the applicant, shown as "Feedback from Our Team").
+alter table public.creator_applications
+  add column if not exists reviewed_at timestamptz;
+alter table public.creator_applications
+  add column if not exists rejection_reason text;
 
 -- Applications are inserted ONLY through /api/creator-apply (service role),
 -- which validates the https social link and rejects duplicate pending apps.

@@ -33,11 +33,12 @@ export async function fetchApprovalPage(offset: number): Promise<CompRow[]> {
   return (data as CompRow[]) ?? [];
 }
 
-// Build display items for a page of pending rows. Only creator submissions are
-// shown (admin uploads auto-approve, so they're never pending — but the role
-// filter stays as a guard). Returns the built items AND the raw row count so the
-// caller can advance the offset / decide hasMore independent of how many were
-// filtered out.
+// Build display items for a page of pending rows. Shows ALL pending designs
+// regardless of the uploader's CURRENT role: admin uploads auto-approve (never
+// pending), so the only way a row is pending is a real creator submission —
+// including one whose author was later promoted to admin (a role filter here
+// would wrongly hide those, stranding the design forever). Returns the built
+// items AND the raw row count so the caller can advance the offset.
 export async function buildApprovalItems(
   rows: CompRow[],
 ): Promise<{ items: PendingItem[]; rawCount: number }> {
@@ -70,9 +71,7 @@ export async function buildApprovalItems(
     }
   }
 
-  const items: PendingItem[] = rows
-    .filter((c) => profileMap.get(c.uploaded_by ?? "")?.role === "creator")
-    .map((c) => {
+  const items: PendingItem[] = rows.map((c) => {
       const prof = profileMap.get(c.uploaded_by ?? "");
       return {
         id: c.id,

@@ -90,6 +90,11 @@ type AuthState = {
   // a revoked creator isn't prompted to re-apply. null = not checked yet.
   wasCreator: boolean | null;
   setWasCreator: (v: boolean | null) => void;
+  // Whether the user's creator application was REJECTED within the last 7 days.
+  // Hides the "Become a Creator" CTA during the cooldown; after 7 days it shows
+  // again so they can re-apply. null = not checked yet.
+  creatorRejectedRecently: boolean | null;
+  setCreatorRejectedRecently: (v: boolean | null) => void;
   // Shared gallery list — kept in sync so uploads appear instantly.
   components: GalleryComponent[];
   componentsLoaded: boolean;
@@ -142,6 +147,8 @@ export const useAuthStore = create<AuthState>()(
       setPendingCreatorApp: (v) => set({ pendingCreatorApp: v }),
       wasCreator: null,
       setWasCreator: (v) => set({ wasCreator: v }),
+      creatorRejectedRecently: null,
+      setCreatorRejectedRecently: (v) => set({ creatorRejectedRecently: v }),
       components: [],
       componentsLoaded: false,
       componentsVersion: 0,

@@ -20,6 +20,9 @@ export default function AuthProvider({
   const profile = useAuthStore((s) => s.profile);
   const setPendingCreatorApp = useAuthStore((s) => s.setPendingCreatorApp);
   const setWasCreator = useAuthStore((s) => s.setWasCreator);
+  const setCreatorRejectedRecently = useAuthStore(
+    (s) => s.setCreatorRejectedRecently,
+  );
 
   // Approved creators who haven't picked a handle yet get the forced username
   // modal — but only after name onboarding (if any) is done. The signal is an
@@ -111,13 +114,24 @@ export default function AuthProvider({
         // existing/revoked creator (so a revoked creator isn't re-prompted).
         supabase
           .from("creator_applications")
-          .select("status")
+          .select("status, reviewed_at")
           .eq("user_id", session.user.id)
-          .in("status", ["pending", "approved"])
           .then(({ data }) => {
-            const rows = (data as { status: string }[] | null) ?? [];
+            const rows =
+              (data as { status: string; reviewed_at: string | null }[] | null) ??
+              [];
             setPendingCreatorApp(rows.some((r) => r.status === "pending"));
             setWasCreator(rows.some((r) => r.status === "approved"));
+            // Rejected within the last 7 days → still in cooldown.
+            const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+            setCreatorRejectedRecently(
+              rows.some(
+                (r) =>
+                  r.status === "rejected" &&
+                  !!r.reviewed_at &&
+                  new Date(r.reviewed_at).getTime() > weekAgo,
+              ),
+            );
           });
         // Log a login on an actual sign-in (not INITIAL_SESSION / refresh).
         // Fire-and-forget — analytics-only, must never block auth. Upsert with
@@ -139,6 +153,7 @@ export default function AuthProvider({
         setEmail(null);
         setPendingCreatorApp(null);
         setWasCreator(null);
+        setCreatorRejectedRecently(null);
       }
     });
 
@@ -149,6 +164,8 @@ export default function AuthProvider({
     setAuthLoading,
     setShowOnboarding,
     setPendingCreatorApp,
+    setWasCreator,
+    setCreatorRejectedRecently,
   ]);
 
   return (

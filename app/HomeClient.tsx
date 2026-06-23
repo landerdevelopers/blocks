@@ -7,13 +7,12 @@ import {
   useMemo,
   useState,
 } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Sidebar, { type SidebarCounts } from "./components/Sidebar";
 import Gallery from "./components/Gallery";
 import LoginModal from "./components/LoginModal";
 import AccountModal from "./components/AccountModal";
 import LimitModal from "./components/LimitModal";
-import CreatorProgramModal from "./components/CreatorProgramModal";
 import { createClient } from "@/lib/supabase/client";
 import {
   useAuthStore,
@@ -109,6 +108,7 @@ function HomeInner({
 
   // Fresh magic-link login → open onboarding immediately, before any auth event.
   const searchParams = useSearchParams();
+  const router = useRouter();
   // Initial category from ?category — read from search params (SSR-available)
   // so the server renders the right category from the start (no website flash).
   const startCategory = resolveCategory(searchParams.get("category"));
@@ -135,7 +135,6 @@ function HomeInner({
   const [showLogin, setShowLogin] = useState(false);
   const [loginNotice, setLoginNotice] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
-  const [showCreatorProgram, setShowCreatorProgram] = useState(false);
   // When set (from the sidebar "All Creators" popup), the gallery shows only
   // this creator's designs instead of the category list.
   const [creatorId, setCreatorId] = useState<string | null>(null);
@@ -320,15 +319,15 @@ function HomeInner({
     useAuthStore.persist.clearStorage();
   };
 
-  // "Become a Creator" — logged-in users get the application modal; logged-out
-  // users are sent to the login modal first.
+  // "Become a Creator" — logged-in users go to the Creator Program rules page
+  // (which hosts the application modal); logged-out users hit login first.
   const becomeCreator = () => {
     setShowAccount(false);
     if (!profile) {
       openLogin(false);
       return;
     }
-    setShowCreatorProgram(true);
+    router.push("/creator-rules");
   };
 
   // Seed `used` from the DB so the count survives refreshes. If the profile's
@@ -471,11 +470,6 @@ function HomeInner({
         onLogout={logout}
         used={used}
         onBecomeCreator={becomeCreator}
-      />
-
-      <CreatorProgramModal
-        open={showCreatorProgram}
-        onClose={() => setShowCreatorProgram(false)}
       />
 
       <LimitModal

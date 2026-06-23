@@ -43,7 +43,7 @@ export async function POST(request: Request) {
   // Mark approved.
   const { error: upErr } = await admin
     .from("creator_applications")
-    .update({ status: "approved" })
+    .update({ status: "approved", reviewed_at: new Date().toISOString() })
     .eq("id", applicationId);
   if (upErr) {
     return NextResponse.json({ error: upErr.message }, { status: 500 });
@@ -79,26 +79,28 @@ export async function POST(request: Request) {
       const { error } = await resend.emails.send({
         from,
         to: email,
-        subject: "You're in — welcome to the Blocks Creator Program 🎉",
+        subject: "Welcome to the Blocks Creator Program 🎉",
         html: `
           <div style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#09090b;line-height:1.6;max-width:520px;margin:0 auto;padding:32px 24px">
-            <h1 style="font-size:22px;font-weight:600;letter-spacing:-0.02em;margin:0 0 16px">Welcome aboard, ${name}! 🎉</h1>
+            <p style="font-size:15px;color:#3f3f46;margin:0 0 14px">Hi ${name},</p>
+            <h1 style="font-size:22px;font-weight:600;letter-spacing:-0.02em;margin:0 0 16px">Welcome to the Blocks Creator Program! 🎉</h1>
             <p style="font-size:15px;color:#3f3f46;margin:0 0 14px">
-              Great news — your application to the <strong>Blocks Creator Program</strong> has been approved. You're officially a creator.
+              Your application has been approved, and you're now officially part of the Blocks creator community.
             </p>
-            <p style="font-size:15px;color:#3f3f46;margin:0 0 8px">Here's what you can do now:</p>
+            <p style="font-size:15px;color:#3f3f46;margin:0 0 8px">As a creator, you can now:</p>
             <ul style="font-size:15px;color:#3f3f46;margin:0 0 18px;padding-left:20px">
-              <li style="margin:0 0 6px">Publish your own designs to thousands of designers</li>
-              <li style="margin:0 0 6px">Get a public creator page at <strong>${siteUrl}/creators/your-handle</strong></li>
-              <li style="margin:0 0 6px">Unlock creator-only perks, including a higher daily copy limit</li>
+              <li style="margin:0 0 6px">Publish your designs to the Blocks library</li>
+              <li style="margin:0 0 6px">Build your own public creator profile</li>
+              <li style="margin:0 0 6px">Get discovered by designers across the community</li>
+              <li style="margin:0 0 6px">Access creator-exclusive features as they roll out</li>
             </ul>
             <p style="font-size:15px;color:#3f3f46;margin:0 0 20px">
-              When you open Blocks, we'll ask you to pick a unique username — that's the last step before you start publishing.
+              Open the Blocks website to complete setting up your creator profile. We're excited to see what you create.
             </p>
             <a href="${siteUrl}" style="display:inline-block;background:#2974ff;color:#ffffff;font-size:15px;font-weight:500;text-decoration:none;padding:12px 22px;border-radius:10px;letter-spacing:-0.01em">
               Open Blocks
             </a>
-            <p style="font-size:13px;color:#a1a1aa;margin:28px 0 0">Blocks by Lander Studio</p>
+            <p style="font-size:13px;color:#a1a1aa;margin:28px 0 0">— The Blocks Team</p>
           </div>
         `,
       });

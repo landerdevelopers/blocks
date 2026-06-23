@@ -29,7 +29,6 @@ import { cloudflareThumb, cloudflareLogo } from "@/lib/utils";
 import { todayIST } from "@/lib/ist";
 import AccountModal from "@/app/components/AccountModal";
 import EditProfileModal from "@/app/components/EditProfileModal";
-import CreatorProgramModal from "@/app/components/CreatorProgramModal";
 
 type Creator = {
   id: string;
@@ -159,7 +158,6 @@ export default function CreatorPage() {
 
   // Delete confirmation — id awaiting confirmation (null = closed).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [showCreatorProgram, setShowCreatorProgram] = useState(false);
 
   // Rejection-reason tooltip — rendered in a portal (document.body) so it's never
   // clipped or stacked under a card. Holds the anchor position + the message.
@@ -368,7 +366,7 @@ export default function CreatorPage() {
 
   const becomeCreator = () => {
     setShowAccount(false);
-    setShowCreatorProgram(true);
+    router.push("/creator-rules");
   };
 
   // Which designs a given sort/view includes. "Private blocks" = the creator's
@@ -573,7 +571,7 @@ export default function CreatorPage() {
                     </span>
                   )}
                 </button>
-                <div className="flex min-w-0 flex-col justify-center gap-0.5">
+                <div className="flex min-w-0 flex-col justify-center">
                   <p className="truncate text-[24px] font-medium tracking-[-0.03em] text-black">
                     {creator.full_name ?? "Creator"}
                   </p>
@@ -919,13 +917,14 @@ export default function CreatorPage() {
                     )}
 
                     {/* Send to top — alone, top-right. Pins the block first so
-                        visitors see the creator's preferred order. */}
-                    {isOwner && (
+                        visitors see the creator's preferred order. Approved
+                        designs only (pending/rejected can't be ordered/shown). */}
+                    {isOwner && d.status === "approved" && (
                       <button
                         type="button"
                         onClick={() => pinToTop(d.id)}
                         aria-label="Send to top"
-                        className="absolute right-3 top-3 flex size-9 cursor-pointer items-center justify-center rounded-full bg-[#f5f5f5] text-[#171717] opacity-0 transition-opacity duration-200 hover:bg-[#ececec] group-hover:opacity-100"
+                        className="absolute right-3 top-3 flex h-9 w-[50px] cursor-pointer items-center justify-center rounded-full bg-[#f5f5f5] text-[#171717] opacity-0 transition-opacity duration-200 hover:bg-[#ececec] group-hover:opacity-100"
                       >
                         <ArrowUp size={16} strokeWidth={1.5} />
                       </button>
@@ -938,7 +937,7 @@ export default function CreatorPage() {
                           type="button"
                           onClick={() => togglePrivate(d.id)}
                           aria-label={d.is_private ? "Make public" : "Make private"}
-                          className="flex size-9 cursor-pointer items-center justify-center rounded-full bg-[#f5f5f5] text-[#171717] transition-colors hover:bg-[#ececec]"
+                          className="flex h-9 w-[50px] cursor-pointer items-center justify-center rounded-full bg-[#f5f5f5] text-[#171717] transition-colors hover:bg-[#ececec]"
                         >
                           {d.is_private ? (
                             <EyeOff size={16} strokeWidth={1.5} />
@@ -950,7 +949,7 @@ export default function CreatorPage() {
                           type="button"
                           onClick={() => router.push(`/upload/${d.id}/edit`)}
                           aria-label="Edit design"
-                          className="flex size-9 cursor-pointer items-center justify-center rounded-full bg-[#f5f5f5] text-[#171717] transition-colors hover:bg-[#ececec]"
+                          className="flex h-9 w-[50px] cursor-pointer items-center justify-center rounded-full bg-[#f5f5f5] text-[#171717] transition-colors hover:bg-[#ececec]"
                         >
                           <Pencil size={16} strokeWidth={1.5} />
                         </button>
@@ -958,7 +957,7 @@ export default function CreatorPage() {
                           type="button"
                           onClick={() => setConfirmDelete(d.id)}
                           aria-label="Delete design"
-                          className="flex size-9 cursor-pointer items-center justify-center rounded-full bg-[#ffdede] text-[#ef4444] transition-colors hover:bg-[#ffcaca]"
+                          className="flex h-9 w-[50px] cursor-pointer items-center justify-center rounded-full bg-[#ffdede] text-[#ef4444] transition-colors hover:bg-[#ffcaca]"
                         >
                           <Trash2 size={16} strokeWidth={1.5} />
                         </button>
@@ -1050,11 +1049,6 @@ export default function CreatorPage() {
           // Pick up any name/bio/socials/CTA the owner just edited.
           refetchCreator();
         }}
-      />
-
-      <CreatorProgramModal
-        open={showCreatorProgram}
-        onClose={() => setShowCreatorProgram(false)}
       />
     </main>
   );

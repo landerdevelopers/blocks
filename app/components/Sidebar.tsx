@@ -532,6 +532,9 @@ export default function Sidebar({
     useAuthStore((s) => s.pendingCreatorApp) === true;
   // Existing OR revoked creator (approved application) — no "Become a Creator" CTA.
   const wasCreator = useAuthStore((s) => s.wasCreator) === true;
+  // Rejected within the last 7 days — CTA hidden during the cooldown.
+  const rejectedRecently =
+    useAuthStore((s) => s.creatorRejectedRecently) === true;
 
   // `cols` derives from localStorage on the client, so the SSR value differs.
   // Render the column-split segments only after mount to avoid a hydration
@@ -662,7 +665,7 @@ export default function Sidebar({
                           type="button"
                           onClick={() => pickCreator(null)}
                           className={`flex w-full cursor-pointer items-center gap-2 p-2.5 transition-colors ${
-                            selectedCreator ? "hover:bg-[#f2f2f2]" : "bg-[#e4e4e7]"
+                            selectedCreator ? "hover:bg-[#fafafa]" : "bg-[#f2f2f2]"
                           }`}
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -698,7 +701,7 @@ export default function Sidebar({
                             type="button"
                             onClick={() => pickCreator(c)}
                             className={`group flex w-full cursor-pointer items-center justify-between p-2.5 transition-colors ${
-                              active ? "bg-[#e4e4e7]" : "hover:bg-[#f2f2f2]"
+                              active ? "bg-[#f2f2f2]" : "hover:bg-[#fafafa]"
                             }`}
                           >
                             <span className="flex items-center gap-2">
@@ -719,7 +722,13 @@ export default function Sidebar({
                                 {c.full_name ?? c.username}
                               </span>
                             </span>
-                            <span className="flex h-[22px] w-[37px] shrink-0 items-center justify-center rounded-md bg-[#f7f7f7] text-xs font-medium tracking-[-0.03em] text-[#71717b] transition-colors group-hover:bg-white">
+                            <span
+                              className={`flex h-[22px] w-[37px] shrink-0 items-center justify-center rounded-md text-xs font-medium tracking-[-0.03em] text-[#71717b] transition-colors ${
+                                active
+                                  ? "bg-white"
+                                  : "bg-[#f7f7f7] group-hover:bg-white"
+                              }`}
+                            >
                               {c.count}
                             </span>
                           </button>
@@ -746,7 +755,9 @@ export default function Sidebar({
                           </span>
                         </button>
                       </div>
-                    ) : hasPendingApplication || wasCreator ? null : (
+                    ) : hasPendingApplication ||
+                      wasCreator ||
+                      rejectedRecently ? null : (
                       <div className="flex items-center border-t border-[#e7e9ee] p-2">
                         <button
                           type="button"
@@ -830,7 +841,7 @@ export default function Sidebar({
                             target="_blank"
                             rel="noopener noreferrer"
                             aria-label={s.label}
-                            className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-[10px] border border-[#e7e9ee] bg-white text-[#52525b] transition-opacity hover:opacity-90"
+                            className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-[58px] bg-white text-[#52525b] transition-opacity hover:opacity-80"
                           >
                             {s.icon}
                             {single && (

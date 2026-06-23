@@ -94,7 +94,12 @@ export default function EditProfileModal({
     result: "available" | "taken" | "error";
   } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  // Per-section errors — each shows directly under its own field, not at the
+  // bottom of the modal.
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [usernameError, setUsernameError] = useState<string | null>(null);
+  const [bioError, setBioError] = useState<string | null>(null);
+  const [socialsError, setSocialsError] = useState<string | null>(null);
   // Link-validation errors stay hidden until the first Save attempt — typing a
   // half-finished URL shouldn't flash a red error on every keystroke.
   const [attempted, setAttempted] = useState(false);
@@ -126,7 +131,10 @@ export default function EditProfileModal({
     setWeb(profile.website_url ?? "");
     setCta(profile.cta_url ?? "");
     setRemote(null);
-    setSaveError(null);
+    setAvatarError(null);
+    setUsernameError(null);
+    setBioError(null);
+    setSocialsError(null);
     setAttempted(false);
   }, [open, profile]);
 
@@ -136,13 +144,16 @@ export default function EditProfileModal({
       ? null
       : `${label} link must start with https://`;
 
-  // Per-field link validation (https + on-domain + has a handle).
-  const socialFieldError =
+  // Per-field link validation (https + on-domain + has a handle). Split so each
+  // message renders under its own section: the socials box (web/x/ig/li) vs the
+  // separate Hire-Creator CTA field.
+  const socialBoxError =
     socialUrlError(xh, "x") ??
     socialUrlError(ig, "instagram") ??
     socialUrlError(li, "linkedin") ??
-    httpsError(web, "Website") ??
-    httpsError(cta, "Hire Creator");
+    httpsError(web, "Website");
+  const ctaError = httpsError(cta, "Hire Creator");
+  const socialFieldError = socialBoxError ?? ctaError;
 
   // Bare handles parsed from the link fields — what we persist.
   const xHandle = parseHandle(xh, "x");
@@ -174,7 +185,7 @@ export default function EditProfileModal({
         .replace(/[^a-z0-9_]/g, "")
         .slice(0, 20),
     );
-    setSaveError(null);
+    setUsernameError(null);
   };
 
   const usernameChanged = username !== (profile?.username ?? "");
@@ -228,7 +239,9 @@ export default function EditProfileModal({
     setAttempted(true);
     if (socialFieldError) return;
     setSaving(true);
-    setSaveError(null);
+    setUsernameError(null);
+    setBioError(null);
+    setSocialsError(null);
     // Claim the new handle first (DB-validated + race-safe).
     if (usernameChanged) {
       const { data, error } = await supabase.rpc("set_my_username", {
@@ -238,7 +251,7 @@ export default function EditProfileModal({
         setSaving(false);
         if (data?.error === "taken")
           setRemote({ handle: username, result: "taken" });
-        else setSaveError("Couldn't save. Please try again.");
+        else setUsernameError("Couldn't save. Please try again.");
         return;
       }
     }
@@ -255,7 +268,7 @@ export default function EditProfileModal({
       });
       if (error) {
         setSaving(false);
-        setSaveError(error.message || "Couldn't save bio.");
+        setBioError(error.message || "Couldn't save bio.");
         return;
       }
     }
@@ -269,7 +282,7 @@ export default function EditProfileModal({
       });
       if (error) {
         setSaving(false);
-        setSaveError(error.message || "Couldn't save socials.");
+        setSocialsError(error.message || "Couldn't save socials.");
         return;
       }
     }
@@ -290,11 +303,12 @@ export default function EditProfileModal({
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-picking the same file later
     if (!file || !profile) return;
+    setAvatarError(null);
     setUploading(true);
     const { profile: updated, error } = await replaceAvatar(file, profile);
     setUploading(false);
     if (error) {
-      setSaveError(error);
+      setAvatarError(error);
       return;
     }
     if (updated) setProfile(updated);
@@ -342,7 +356,7 @@ export default function EditProfileModal({
         onClick={(e) => e.stopPropagation()}
         className="relative flex max-h-[85vh] w-[440px] flex-col overflow-hidden rounded-2xl border border-[#e7e9ee] bg-white shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
       >
-        <ScrollFadeEffect className="flex flex-col gap-6 p-7">
+        <ScrollFadeEffect className="flex min-h-0 flex-1 flex-col gap-6 p-7">
           {/* Header — scrolls with the content */}
           <div className="flex items-start justify-between gap-3">
             <div className="flex flex-col gap-1">
@@ -419,6 +433,11 @@ export default function EditProfileModal({
                 Change Photo
               </button>
             </div>
+            {avatarError && (
+              <p className="-mt-2 text-[12px] tracking-[-0.03em] text-[#ff2f2f]">
+                {avatarError}
+              </p>
+            )}
 
             <div className="flex flex-col gap-3">
               {/* Name */}
@@ -428,10 +447,7 @@ export default function EditProfileModal({
                 </label>
                 <Input
                   value={name}
-                  onChange={(e) => {
-                    setName(e.target.value);
-                    setSaveError(null);
-                  }}
+                  onChange={(e) => setName(e.target.value)}
                   placeholder="Your name"
                   className="h-9"
                 />
@@ -463,6 +479,11 @@ export default function EditProfileModal({
                     {usernameHint.text}
                   </p>
                 )}
+                {usernameError && (
+                  <p className="text-[12px] tracking-[-0.03em] text-[#ff2f2f]">
+                    {usernameError}
+                  </p>
+                )}
               </div>
 
               {/* Bio */}
@@ -474,7 +495,7 @@ export default function EditProfileModal({
                   value={bio}
                   onChange={(e) => {
                     setBio(e.target.value);
-                    setSaveError(null);
+                    setBioError(null);
                   }}
                   maxLength={100}
                   placeholder="Write a short bio…"
@@ -483,6 +504,11 @@ export default function EditProfileModal({
                 <span className="-mt-0.5 self-end text-[12px] tracking-[-0.03em] text-[#a1a1aa] tabular-nums">
                   {bio.length}/100
                 </span>
+                {bioError && (
+                  <p className="text-[12px] tracking-[-0.03em] text-[#ff2f2f]">
+                    {bioError}
+                  </p>
+                )}
               </div>
 
               {/* Socials — usernames only (X / Instagram / LinkedIn); website is a
@@ -501,7 +527,7 @@ export default function EditProfileModal({
                       value={web}
                       onChange={(e) => {
                         setWeb(e.target.value);
-                        setSaveError(null);
+                        setSocialsError(null);
                       }}
                       placeholder="https://yourwebsite.com"
                       autoComplete="off"
@@ -513,13 +539,13 @@ export default function EditProfileModal({
                     <img
                       src="/x.svg"
                       alt=""
-                      className={`block size-[18px] shrink-0 grayscale ${xh ? "opacity-80" : "opacity-40"}`}
+                      className={`block size-[18px] shrink-0 transition ${xh ? "opacity-100" : "grayscale opacity-50 group-focus-within:opacity-100 group-focus-within:grayscale-0"}`}
                     />
                     <input
                       value={xh}
                       onChange={(e) => {
                         setXh(e.target.value);
-                        setSaveError(null);
+                        setSocialsError(null);
                       }}
                       placeholder="https://x.com/username"
                       autoComplete="off"
@@ -532,13 +558,13 @@ export default function EditProfileModal({
                     <img
                       src="/insta.svg"
                       alt=""
-                      className={`block size-[18px] shrink-0 grayscale ${ig ? "opacity-80" : "opacity-40"}`}
+                      className={`block size-[18px] shrink-0 transition ${ig ? "opacity-100" : "grayscale opacity-50 group-focus-within:opacity-100 group-focus-within:grayscale-0"}`}
                     />
                     <input
                       value={ig}
                       onChange={(e) => {
                         setIg(e.target.value);
-                        setSaveError(null);
+                        setSocialsError(null);
                       }}
                       placeholder="https://instagram.com/username"
                       autoComplete="off"
@@ -551,13 +577,13 @@ export default function EditProfileModal({
                     <img
                       src="/linkedin.svg"
                       alt=""
-                      className={`block size-[18px] shrink-0 grayscale ${li ? "opacity-80" : "opacity-40"}`}
+                      className={`block size-[18px] shrink-0 transition ${li ? "opacity-100" : "grayscale opacity-50 group-focus-within:opacity-100 group-focus-within:grayscale-0"}`}
                     />
                     <input
                       value={li}
                       onChange={(e) => {
                         setLi(e.target.value);
-                        setSaveError(null);
+                        setSocialsError(null);
                       }}
                       placeholder="https://linkedin.com/in/username"
                       autoComplete="off"
@@ -566,9 +592,9 @@ export default function EditProfileModal({
                     />
                   </div>
                 </div>
-                {attempted && socialFieldError && (
+                {((attempted && socialBoxError) || socialsError) && (
                   <p className="text-[12px] tracking-[-0.03em] text-[#ff2f2f]">
-                    {socialFieldError}
+                    {(attempted && socialBoxError) || socialsError}
                   </p>
                 )}
               </div>
@@ -582,23 +608,25 @@ export default function EditProfileModal({
                   value={cta}
                   onChange={(e) => {
                     setCta(e.target.value);
-                    setSaveError(null);
+                    setSocialsError(null);
                   }}
                   placeholder="https://yoursite.com/link"
                   autoComplete="off"
                   className="h-9"
                 />
+                {attempted && ctaError && (
+                  <p className="text-[12px] tracking-[-0.03em] text-[#ff2f2f]">
+                    {ctaError}
+                  </p>
+                )}
               </div>
             </div>
           </div>
 
-          {saveError && (
-            <p className="-mt-2 text-[12px] tracking-[-0.03em] text-[#ff2f2f]">
-              {saveError}
-            </p>
-          )}
+        </ScrollFadeEffect>
 
-          {/* Save */}
+        {/* Sticky footer — Save stays visible; content above scrolls. */}
+        <div className="shrink-0 border-t border-[#e7e9ee] bg-white px-7 py-4">
           <button
             type="button"
             onClick={onSave}
@@ -607,7 +635,7 @@ export default function EditProfileModal({
           >
             {saving ? "Saving…" : "Save"}
           </button>
-        </ScrollFadeEffect>
+        </div>
       </div>
     </div>,
     document.body,

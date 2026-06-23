@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Check, X } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { Textarea } from "@/components/ui/textarea";
 import { loadMoreApplications } from "./actions";
 
 export type AppItem = {
@@ -64,6 +65,10 @@ export default function ApplicationsList({
   const [busy, setBusy] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Reject flow: the application id awaiting a feedback note (null = modal
+  // closed) and the feedback draft (emailed to the applicant).
+  const [rejectId, setRejectId] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadingRef = useRef(false);
 
@@ -92,16 +97,22 @@ export default function ApplicationsList({
     return () => obs.disconnect();
   }, [hasMore, apps.length, pageSize]);
 
-  // Reject is a plain status update. Approve goes through an API route so the
-  // applicant gets a congratulations email (and the email key stays server-side).
-  const reject = async (id: string) => {
+  // Reject opens a feedback modal first; submitting posts to an API route that
+  // saves the rejection + emails the applicant the feedback (email key stays
+  // server-side). Approve likewise goes through its own route (welcome email).
+  const submitReject = async () => {
+    const id = rejectId;
+    const feedback = reason.trim();
+    if (!id || !feedback) return;
+    setRejectId(null);
     setBusy(id);
-    const { error } = await createClient()
-      .from("creator_applications")
-      .update({ status: "rejected" })
-      .eq("id", id);
+    const res = await fetch("/api/creator-rejected", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ applicationId: id, reason: feedback }),
+    });
     setBusy(null);
-    if (error) return;
+    if (!res.ok) return;
     setApps((a) => a.map((x) => (x.id === id ? { ...x, status: "rejected" } : x)));
   };
 
@@ -125,8 +136,71 @@ export default function ApplicationsList({
     );
   }
 
+  // Rejection-feedback modal — same design as the design-approvals reject modal.
+  const rejectModal =
+    rejectId && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            onClick={() => setRejectId(null)}
+            className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="relative flex w-[445px] max-w-full flex-col gap-5 rounded-[20px] bg-white p-6 shadow-[0px_0px_0px_1px_rgba(51,51,51,0.04),0px_5px_5px_-2.5px_rgba(51,51,51,0.08),0px_1px_3px_-1.5px_rgba(51,51,51,0.16)]"
+            >
+              <div className="flex flex-col gap-1">
+                <div className="flex items-start justify-between">
+                  <h2 className="text-[16px] font-medium tracking-[-0.03em] text-[#09090b]">
+                    Why are you rejecting this application?
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setRejectId(null)}
+                    aria-label="Close"
+                    className="cursor-pointer text-[#71717b] transition-colors hover:text-[#09090b]"
+                  >
+                    <X size={18} strokeWidth={1.75} />
+                  </button>
+                </div>
+                <p className="text-[14px] tracking-[-0.03em] text-[#71717b]">
+                  This feedback is emailed to the applicant.
+                </p>
+              </div>
+
+              <Textarea
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                autoFocus
+                placeholder="Share feedback so they can improve and re-apply…"
+                className="h-[88px] resize-none rounded-[12px] text-[14px] tracking-[-0.03em] placeholder:text-[#757575] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              />
+
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setRejectId(null)}
+                  className="cursor-pointer rounded-[10px] border border-[#ebebeb] bg-white px-3 py-2 text-[14px] tracking-[-0.03em] text-[#71717b] shadow-[0px_1px_2px_rgba(10,13,20,0.03)] transition-colors hover:bg-[#ececec]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={submitReject}
+                  disabled={!reason.trim()}
+                  className="cursor-pointer rounded-[10px] bg-[#2974ff] px-3 py-2 text-[14px] tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Submit
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
+
   return (
     <div className="flex flex-col gap-4">
+      {rejectModal}
       {apps.map((a) => {
         const st = STATUS[a.status];
         const isBusy = busy === a.id;
@@ -200,7 +274,10 @@ export default function ApplicationsList({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => reject(a.id)}
+                    onClick={() => {
+                      setReason("");
+                      setRejectId(a.id);
+                    }}
                     disabled={isBusy}
                     className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#e7e9ee] px-3.5 py-2 text-[14px] font-medium tracking-[-0.03em] text-[#52525b] transition-colors hover:bg-[#fff0f0] hover:text-[#ef4444] disabled:cursor-not-allowed disabled:opacity-50"
                   >

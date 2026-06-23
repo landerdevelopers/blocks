@@ -22,9 +22,13 @@ function isValidUrl(s: string): boolean {
 export default function CreatorProgramModal({
   open,
   onClose,
+  onApplied,
 }: {
   open: boolean;
   onClose: () => void;
+  // Called after a successful submission. When provided, the modal skips its
+  // built-in success view and hands control back (e.g. to redirect).
+  onApplied?: () => void;
 }) {
   const profile = useAuthStore((s) => s.profile);
   const setPendingCreatorApp = useAuthStore((s) => s.setPendingCreatorApp);
@@ -92,10 +96,16 @@ export default function CreatorProgramModal({
     }
     // Application is now pending — hide the "Become a Creator" CTA everywhere.
     setPendingCreatorApp(true);
-    // Clear the form and show the success view.
+    // Clear the form.
     setRole("");
     setSocial("");
     setReason("");
+    // Hand back to the caller (e.g. redirect) if it wants to take over; else
+    // fall back to the built-in success view.
+    if (onApplied) {
+      onApplied();
+      return;
+    }
     setSubmitted(true);
   };
 

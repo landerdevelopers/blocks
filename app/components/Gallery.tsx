@@ -1040,7 +1040,7 @@ export default function Gallery({
               {/* Left — creator card (desktop only; only for creator uploads).
                   Clicks on the actual cards/image are stopped so they don't close
                   the lightbox; clicking the surrounding empty area / gaps does. */}
-              <div className="hidden w-[240px] shrink-0 self-start lg:flex">
+              <div className="hidden w-[280px] shrink-0 self-start lg:flex">
                 {detail?.creator_username ? (
                   <div
                     onClick={(e) => e.stopPropagation()}
@@ -1075,19 +1075,22 @@ export default function Gallery({
                           )}
                         </span>
                         <div className="flex flex-col justify-center">
-                          <a
-                            href={
-                              isLanderCard
-                                ? detail.creator_website_url ?? "#"
-                                : `/creators/${detail.creator_username}`
-                            }
-                            target={isLanderCard ? "_blank" : undefined}
-                            rel={isLanderCard ? "noopener noreferrer" : undefined}
-                            className="text-[16px] font-medium tracking-[-0.03em] text-black hover:underline"
-                          >
-                            {detail.creator_display_name ??
-                              detail.creator_username}
-                          </a>
+                          {isLanderCard ? (
+                            <a
+                              href={detail.creator_website_url ?? "#"}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[16px] font-medium tracking-[-0.03em] text-black hover:underline"
+                            >
+                              {detail.creator_display_name ??
+                                detail.creator_username}
+                            </a>
+                          ) : (
+                            <span className="text-[16px] font-medium tracking-[-0.03em] text-black">
+                              {detail.creator_display_name ??
+                                detail.creator_username}
+                            </span>
+                          )}
                           <span className="text-[14px] tracking-[-0.01em] text-[#6f6f6f]">
                             {detail.creator_design_count} Design
                             {detail.creator_design_count === 1 ? "" : "s"}{" "}
@@ -1171,7 +1174,7 @@ export default function Gallery({
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   aria-label={s.label}
-                                  className="flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-[10px] border border-[#e7e9ee] bg-white text-[#52525b] transition-opacity hover:opacity-90"
+                                  className="flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#f4f4f6] text-[#52525b] transition-colors hover:bg-[#e6e6ea]"
                                 >
                                   {s.icon}
                                   {single && (
@@ -1189,7 +1192,7 @@ export default function Gallery({
                             href={detail.creator_cta_url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex min-h-9 items-center justify-center gap-1.5 rounded-lg bg-[#2974ff] px-4 py-2 text-[14px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6]"
+                            className="flex min-h-9 items-center justify-center gap-1.5 rounded-lg bg-[#2974ff] px-4 py-2 text-[14px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6] mt-4"
                           >
                             Hire Creator
                           </a>
@@ -1311,14 +1314,14 @@ export default function Gallery({
                 {detail ? (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="flex h-[76px] flex-col justify-center gap-2 rounded-[12px] bg-white px-4 text-[14px] tracking-[-0.03em] text-[#52525b] shadow-[0px_12px_40px_rgba(0,0,0,0.4)]"
+                    className="flex h-[76px] flex-col justify-center gap-2 rounded-[12px] bg-white px-4 text-[14px] tracking-[-0.03em] text-[#71717B] shadow-[0px_12px_40px_rgba(0,0,0,0.4)]"
                   >
                     <span className="flex items-center gap-2">
-                      <Calendar size={16} strokeWidth={1.5} className="text-[#a1a1aa]" />
+                      <Calendar size={16} strokeWidth={1.5} className="text-[#71717B]" />
                       {fmtPosted(detail.created_at)}
                     </span>
                     <span className="flex items-center gap-2">
-                      <Copy size={16} strokeWidth={1.5} className="text-[#a1a1aa]" />
+                      <Copy size={16} strokeWidth={1.5} className="text-[#71717B]" />
                       {fmtCount(detail.copy_count)} Copies
                     </span>
                   </div>

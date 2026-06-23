@@ -70,6 +70,8 @@ export default function AccountModal({
   // True for an existing OR revoked creator (approved application) — they should
   // not see the "Become a Creator" CTA.
   const wasCreator = useAuthStore((s) => s.wasCreator);
+  // Rejected within the last 7 days — CTA hidden during the cooldown.
+  const rejectedRecently = useAuthStore((s) => s.creatorRejectedRecently);
 
   // Live countdown to midnight IST — recalculated immediately and every 60s.
   const [reset, setReset] = useState(timeUntilMidnightIST());
@@ -253,7 +255,8 @@ export default function AccountModal({
           // Become Creator — hidden while an application is in review, and while
           // the pending-check is still loading (avoids a flash).
           hasPendingApplication === false &&
-          !wasCreator && (
+          !wasCreator &&
+          !rejectedRecently && (
             <div className="flex flex-col gap-[6px]">
               <button
                 type="button"
