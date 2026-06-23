@@ -1099,7 +1099,7 @@ export default function Gallery({
                         </div>
                       </div>
                       {detail.creator_bio && (
-                        <p className="whitespace-pre-wrap text-[15px] tracking-[-0.02em] text-[#71717b]">
+                        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[15px] tracking-[-0.02em] text-[#71717b]">
                           {detail.creator_bio}
                         </p>
                       )}

@@ -598,7 +598,7 @@ export default function CreatorPage() {
               {/* Bio — read-only on the card. Editing happens in the
                   Edit Profile modal. No bio + owner → "No bio yet" + pencil. */}
               {creator.bio ? (
-                <p className="w-full whitespace-pre-wrap text-[16px] tracking-[-0.03em] text-black">
+                <p className="w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[16px] tracking-[-0.03em] text-black">
                   {creator.bio}
                 </p>
               ) : isOwner ? (

@@ -777,7 +777,7 @@ export default function Sidebar({
             </div>
             {selectedCreator ? (
               <div className="flex flex-col gap-2.5">
-                <p className="text-base tracking-[-0.03em] text-[#71717b]">
+                <p className="break-words [overflow-wrap:anywhere] text-base tracking-[-0.03em] text-[#71717b]">
                   {selectedCreator.bio ? selectedCreator.bio : "No bio added"}
                 </p>
                 {creatorSocials &&

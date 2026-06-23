@@ -136,7 +136,12 @@ export default function EditProfileModal({
     setBioError(null);
     setSocialsError(null);
     setAttempted(false);
-  }, [open, profile]);
+    // Seed ONLY when the modal opens — not on every `profile` change. A token
+    // refresh on tab/window switch re-sets the store profile (new object), and
+    // depending on it here would re-run this effect and wipe the user's unsaved
+    // edits. The profile is always loaded by the time Edit Profile is openable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // Website + Hire-Creator take a full link — must be https (no domain rule).
   const httpsError = (v: string, label: string) =>
