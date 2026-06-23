@@ -26,11 +26,10 @@ import { createClient } from "@/lib/supabase/client";
 import { revalidateSidebarCounts } from "@/app/actions";
 import { useAuthStore } from "@/store/authStore";
 import { cloudflareThumb, cloudflareLogo } from "@/lib/utils";
-import { XIcon, InstagramIcon, LinkedinIcon } from "@/components/social-icons";
 import { todayIST } from "@/lib/ist";
 import AccountModal from "@/app/components/AccountModal";
+import EditProfileModal from "@/app/components/EditProfileModal";
 import CreatorProgramModal from "@/app/components/CreatorProgramModal";
-import { Textarea } from "@/components/ui/textarea";
 
 type Creator = {
   id: string;
@@ -156,9 +155,7 @@ export default function CreatorPage() {
   const [sortOpen, setSortOpen] = useState(false);
 
   const [showAccount, setShowAccount] = useState(false);
-
-  const [editingBio, setEditingBio] = useState(false);
-  const [bioDraft, setBioDraft] = useState("");
+  const [showEditProfile, setShowEditProfile] = useState(false);
 
   // Delete confirmation — id awaiting confirmation (null = closed).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -298,27 +295,6 @@ export default function CreatorPage() {
       window.removeEventListener("focus", onFocus);
     };
   }, [creator?.id, refetchDesigns]);
-
-  const saveBio = async () => {
-    if (!creator) return;
-    const next = bioDraft.trim();
-    const prev = creator.bio;
-    // Optimistic; revert on failure.
-    setCreator((c) => (c ? { ...c, bio: next } : c));
-    setEditingBio(false);
-    const { data, error } = await createClient().rpc("update_creator_bio", {
-      target: creator.id,
-      new_bio: next,
-    });
-    if (error || !data) {
-      setCreator((c) => (c ? { ...c, bio: prev } : c));
-      return;
-    }
-    // Keep the store in sync only when editing your OWN page.
-    if (profile && profile.id === creator.id) {
-      setProfile({ ...profile, bio: next || null });
-    }
-  };
 
   const doDelete = async () => {
     if (!confirmDelete) return;
@@ -561,161 +537,170 @@ export default function CreatorPage() {
         </button>
 
         <div className="flex flex-col gap-[26px]">
-          {/* Identity */}
-          <div className="flex flex-col gap-5">
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                onClick={() => isOwner && setShowAccount(true)}
-                aria-label={isOwner ? "Edit profile" : undefined}
-                className={`group relative size-[90px] shrink-0 overflow-hidden rounded-[20px] bg-[#ebebef] ${
-                  isOwner ? "cursor-pointer" : "cursor-default"
-                }`}
-              >
-                {creator.avatar_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    alt=""
-                    src={creator.avatar_url}
-                    referrerPolicy="no-referrer"
-                    className="size-full object-cover"
-                  />
-                ) : (
-                  <span className="flex size-full items-center justify-center text-[32px] font-medium text-[#09090b]">
-                    {initial}
-                  </span>
-                )}
-                {/* Owner: edit overlay on hover. */}
-                {isOwner && (
-                  <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-                    <Pencil size={22} strokeWidth={1.75} />
-                  </span>
-                )}
-              </button>
-              <div className="flex flex-col justify-center gap-0.5">
-                <p className="text-[24px] font-medium tracking-[-0.03em] text-black">
-                  {creator.full_name ?? "Creator"}
-                </p>
-                <p className="text-[16px] tracking-[-0.03em] text-[#71717b]">
-                  @{creator.username}
-                </p>
+          {/* Identity — boxed profile card */}
+          {(() => {
+            const hasSocials =
+              !!creator.website_url ||
+              !!creator.x_handle ||
+              !!creator.instagram_handle ||
+              !!creator.linkedin_handle;
+            const socialCls =
+              "flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-[#52525b] shadow-[0px_1px_2px_rgba(10,13,20,0.04)] transition-colors hover:text-black hover:bg-[#fafafa]";
+            return (
+          <div className="flex w-full max-w-[460px] flex-col gap-5 rounded-[24px] bg-[#f5f5f5] p-4">
+            {/* Row: avatar + name (grows) + edit profile */}
+            <div className="flex w-full items-start gap-5">
+              <div className="flex min-w-0 flex-1 items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => isOwner && setShowEditProfile(true)}
+                  aria-label={isOwner ? "Edit profile" : undefined}
+                  className={`group relative size-[90px] shrink-0 overflow-hidden rounded-[14px] bg-[#ebebef] ${
+                    isOwner ? "cursor-pointer" : "cursor-default"
+                  }`}
+                >
+                  {creator.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      alt=""
+                      src={creator.avatar_url}
+                      referrerPolicy="no-referrer"
+                      className="size-full object-cover"
+                    />
+                  ) : (
+                    <span className="flex size-full items-center justify-center text-[32px] font-medium text-[#09090b]">
+                      {initial}
+                    </span>
+                  )}
+                </button>
+                <div className="flex min-w-0 flex-col justify-center gap-0.5">
+                  <p className="truncate text-[24px] font-medium tracking-[-0.03em] text-black">
+                    {creator.full_name ?? "Creator"}
+                  </p>
+                  <p className="truncate text-[16px] tracking-[-0.03em] text-[#71717b]">
+                    @{creator.username}
+                  </p>
+                </div>
               </div>
+
+              {isOwner && (
+                <button
+                  type="button"
+                  onClick={() => setShowEditProfile(true)}
+                  className="flex shrink-0 cursor-pointer items-center gap-2.5 rounded-[10px] border border-[#e7e9ee] bg-white px-2.5 py-1.5 text-[16px] tracking-[-0.03em] text-black transition-colors hover:bg-[#fafafa]"
+                >
+                  <Pencil size={14} strokeWidth={1.5} />
+                  Edit Profile
+                </button>
+              )}
             </div>
 
-            {/* Bio — inline borderless input; clicking outside (blur) saves.
-                Links use `word(https://link)` syntax. Pencil sits inline after
-                the last word. 100-char limit. */}
-            {editingBio ? (
-              <div className="relative w-[520px] max-w-full">
-                <Textarea
-                  value={bioDraft}
-                  onChange={(e) => setBioDraft(e.target.value)}
-                  onBlur={saveBio}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      setBioDraft(creator.bio ?? "");
-                      e.currentTarget.blur();
-                    }
-                  }}
-                  autoFocus
-                  maxLength={100}
-                  placeholder="Please add a bio"
-                  className="h-[88px] pr-14 text-[16px] placeholder:text-[#a1a1aa]"
-                />
-                <span className="pointer-events-none absolute right-3 top-2.5 text-[12px] tracking-[-0.03em] text-[#a1a1aa] tabular-nums">
-                  {bioDraft.length}/100
-                </span>
-              </div>
-            ) : (
-              <p className="group max-w-[520px] whitespace-pre-wrap text-[16px] tracking-[-0.03em] text-black">
-                {creator.bio ? (
-                  creator.bio
-                ) : (
-                  <span className="text-[#a1a1aa]">
-                    {isOwner ? "Please add a bio" : "No bio added"}
+            {/* Bio + action row */}
+            <div className="flex w-full flex-col gap-3.5">
+              {/* Bio — read-only on the card. Editing happens in the
+                  Edit Profile modal. No bio + owner → "No bio yet" + pencil. */}
+              {creator.bio ? (
+                <p className="w-full whitespace-pre-wrap text-[16px] tracking-[-0.03em] text-black">
+                  {creator.bio}
+                </p>
+              ) : isOwner ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[16px] tracking-[-0.03em] text-[#a1a1aa]">
+                    No bio yet
                   </span>
-                )}
-                {isOwner && (
                   <button
                     type="button"
-                    onClick={() => {
-                      setBioDraft(creator.bio ?? "");
-                      setEditingBio(true);
-                    }}
-                    aria-label="Edit bio"
-                    className="ml-1.5 inline-flex translate-y-0.5 cursor-pointer text-[#71717b] opacity-0 transition-opacity hover:text-[#09090b] focus-visible:opacity-100 group-hover:opacity-100"
+                    onClick={() => setShowEditProfile(true)}
+                    aria-label="Add bio"
+                    className="inline-flex translate-y-px cursor-pointer text-[#71717b] transition-colors hover:text-[#09090b]"
                   >
                     <Pencil size={14} strokeWidth={1.5} />
                   </button>
-                )}
-              </p>
-            )}
+                </div>
+              ) : (
+                <p className="text-[16px] tracking-[-0.03em] text-[#a1a1aa]">
+                  No bio added
+                </p>
+              )}
 
-            {/* Socials + custom CTA */}
-            {(creator.website_url ||
-              creator.x_handle ||
-              creator.instagram_handle ||
-              creator.linkedin_handle ||
-              creator.cta_url) && (
-              <div className="flex flex-wrap items-center gap-2">
-                {creator.website_url && (
-                  <a
-                    href={creator.website_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="Website"
-                    className="flex size-9 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
-                  >
-                    <Globe size={17} strokeWidth={1.5} />
-                  </a>
-                )}
-                {creator.x_handle && (
-                  <a
-                    href={`https://x.com/${creator.x_handle}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="X"
-                    className="flex size-9 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
-                  >
-                    <XIcon size={15} />
-                  </a>
-                )}
-                {creator.instagram_handle && (
-                  <a
-                    href={`https://instagram.com/${creator.instagram_handle}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="Instagram"
-                    className="flex size-9 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
-                  >
-                    <InstagramIcon size={16} />
-                  </a>
-                )}
-                {creator.linkedin_handle && (
-                  <a
-                    href={`https://linkedin.com/in/${creator.linkedin_handle}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="LinkedIn"
-                    className="flex size-9 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
-                  >
-                    <LinkedinIcon size={16} />
-                  </a>
-                )}
-                {creator.cta_url && (
-                  <a
-                    href={creator.cta_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 rounded-full bg-[#09090b] px-4 py-1.5 text-[13px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#27272a]"
-                  >
-                    Hire Creator
-                    <ExternalLink size={14} strokeWidth={1.5} />
-                  </a>
-                )}
-              </div>
-            )}
+              {/* Hire Creator (grows, disabled until a link is set) + socials */}
+              <div className="flex w-full items-center gap-3.5">
+                  {creator.cta_url ? (
+                    <a
+                      href={creator.cta_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex min-w-px flex-1 items-center justify-center gap-1 rounded-[10px] bg-[#2974ff] px-1.5 py-2 text-[14px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e0]"
+                    >
+                      Hire Creator
+                      <ExternalLink size={14} strokeWidth={1.75} />
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="flex min-w-px flex-1 cursor-not-allowed items-center justify-center gap-1 rounded-[10px] bg-[#2974ff] px-1.5 py-2 text-[14px] font-medium tracking-[-0.03em] text-white opacity-50"
+                    >
+                      Hire Creator
+                      <ExternalLink size={14} strokeWidth={1.75} />
+                    </button>
+                  )}
+                  {hasSocials && (
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {creator.website_url && (
+                        <a
+                          href={creator.website_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="Website"
+                          className={socialCls}
+                        >
+                          <Globe size={17} strokeWidth={1.5} />
+                        </a>
+                      )}
+                      {creator.x_handle && (
+                        <a
+                          href={`https://x.com/${creator.x_handle}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="X"
+                          className={socialCls}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src="/x.svg" alt="" className="size-[18px]" />
+                        </a>
+                      )}
+                      {creator.instagram_handle && (
+                        <a
+                          href={`https://instagram.com/${creator.instagram_handle}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="Instagram"
+                          className={socialCls}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src="/insta.svg" alt="" className="size-[18px]" />
+                        </a>
+                      )}
+                      {creator.linkedin_handle && (
+                        <a
+                          href={`https://linkedin.com/in/${creator.linkedin_handle}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="LinkedIn"
+                          className={socialCls}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src="/linkedin.svg" alt="" className="size-[18px]" />
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+            </div>
           </div>
+            );
+          })()}
 
           {/* Action bar: publish + tabs + sort */}
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1052,14 +1037,19 @@ export default function CreatorPage() {
 
       <AccountModal
         open={showAccount}
-        onClose={() => {
-          setShowAccount(false);
-          // Pick up any bio/socials/CTA the owner just edited.
-          refetchCreator();
-        }}
+        onClose={() => setShowAccount(false)}
         onLogout={logout}
         used={used}
         onBecomeCreator={becomeCreator}
+      />
+
+      <EditProfileModal
+        open={showEditProfile}
+        onClose={() => {
+          setShowEditProfile(false);
+          // Pick up any name/bio/socials/CTA the owner just edited.
+          refetchCreator();
+        }}
       />
 
       <CreatorProgramModal

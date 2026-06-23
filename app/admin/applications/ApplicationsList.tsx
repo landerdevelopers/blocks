@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { loadMoreApplications } from "./actions";
 
 export type AppItem = {
   id: string;
@@ -50,9 +51,46 @@ function Field({
   );
 }
 
-export default function ApplicationsList({ items }: { items: AppItem[] }) {
+export default function ApplicationsList({
+  items,
+  initialHasMore = false,
+  pageSize = 30,
+}: {
+  items: AppItem[];
+  initialHasMore?: boolean;
+  pageSize?: number;
+}) {
   const [apps, setApps] = useState(items);
   const [busy, setBusy] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(initialHasMore);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false);
+
+  // Infinite scroll — load the next page (admin-gated server action) when the
+  // bottom sentinel nears. Dedupes by id (approve/reject may have shifted rows).
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore) return;
+    const obs = new IntersectionObserver(
+      async (entries) => {
+        if (!entries[0].isIntersecting || loadingRef.current) return;
+        loadingRef.current = true;
+        setLoadingMore(true);
+        const next = await loadMoreApplications(apps.length);
+        setApps((prev) => {
+          const seen = new Set(prev.map((p) => p.id));
+          return [...prev, ...next.filter((n) => !seen.has(n.id))];
+        });
+        setHasMore(next.length === pageSize);
+        setLoadingMore(false);
+        loadingRef.current = false;
+      },
+      { rootMargin: "400px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasMore, apps.length, pageSize]);
 
   // Reject is a plain status update. Approve goes through an API route so the
   // applicant gets a congratulations email (and the email key stays server-side).
@@ -184,6 +222,14 @@ export default function ApplicationsList({ items }: { items: AppItem[] }) {
           </div>
         );
       })}
+      {hasMore && (
+        <div
+          ref={sentinelRef}
+          className="py-4 text-center text-sm tracking-[-0.03em] text-[#a1a1aa]"
+        >
+          {loadingMore ? "Loading…" : ""}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createAdminClient } from "@/lib/supabase/admin";
 import CreatorAccessButton from "./CreatorAccessButton";
+import AdminBackLink from "../AdminBackLink";
 
 // Admin-only (gated by middleware). Lists every approved creator (a user with
 // an approved Creator Program application) and their design counts by status.
@@ -137,6 +138,7 @@ export default async function AdminCreatorsPage() {
   return (
     <main className="min-h-screen bg-[#f5f5f5] px-6 py-9 text-[#09090b] tracking-[-0.01em]">
       <div className="mx-auto flex w-full max-w-275 flex-col gap-6">
+        <AdminBackLink />
         <header className="flex items-center justify-between">
           <div className="flex flex-col gap-1">
             <h1 className="text-[26px] font-semibold tracking-[-0.04em]">

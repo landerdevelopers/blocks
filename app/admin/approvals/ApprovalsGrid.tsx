@@ -8,6 +8,7 @@ import { Calendar, Check, Clock, X } from "lucide-react";
 import { cloudflareThumb, cloudflareLogo } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { Textarea } from "@/components/ui/textarea";
+import { loadMoreApprovals } from "./actions";
 
 export type PendingItem = {
   id: string;
@@ -350,17 +351,45 @@ function Card({
   );
 }
 
-export default function ApprovalsGrid({ items }: { items: PendingItem[] }) {
+export default function ApprovalsGrid({
+  items,
+  initialHasMore = false,
+  initialRawOffset = 0,
+  pageSize = 30,
+}: {
+  items: PendingItem[];
+  initialHasMore?: boolean;
+  initialRawOffset?: number;
+  pageSize?: number;
+}) {
   const router = useRouter();
-  // The grid is derived from the live server `items` prop (the page is
-  // force-dynamic). `removed` only tracks ids reviewed this session so they
-  // drop instantly before the server data re-fetches.
+  // `removed` only tracks ids reviewed this session so they drop instantly
+  // before the server data re-fetches.
   const [removed, setRemoved] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
   // Reject flow: the design id awaiting a rejection reason (null = modal closed)
   // and the reason draft.
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
+
+  // Paginated list. Seeded from the server's first page; grows via load-more.
+  // `rawOffset` is how many RAW pending rows have been fetched (the creator
+  // filter may show fewer), driving the next offset.
+  const [list, setList] = useState<PendingItem[]>(items);
+  const [hasMore, setHasMore] = useState(initialHasMore);
+  const [rawOffset, setRawOffset] = useState(initialRawOffset);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false);
+
+  // Re-sync when the server sends a fresh first page (e.g. after router.refresh
+  // on review / tab refocus) — reset list + pagination to the new top.
+  useEffect(() => {
+    setList(items);
+    setRawOffset(initialRawOffset);
+    setHasMore(initialHasMore);
+    setRemoved(new Set());
+  }, [items, initialRawOffset, initialHasMore]);
 
   // Refresh the server data when the admin returns to the tab — picks up
   // designs a creator deleted while pending (admin can't realtime-subscribe to
@@ -376,6 +405,31 @@ export default function ApprovalsGrid({ items }: { items: PendingItem[] }) {
       window.removeEventListener("focus", onFocus);
     };
   }, [router]);
+
+  // Infinite scroll — fetch the next page (admin-gated server action).
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore) return;
+    const obs = new IntersectionObserver(
+      async (entries) => {
+        if (!entries[0].isIntersecting || loadingRef.current) return;
+        loadingRef.current = true;
+        setLoadingMore(true);
+        const { items: next, rawCount } = await loadMoreApprovals(rawOffset);
+        setList((prev) => {
+          const seen = new Set(prev.map((p) => p.id));
+          return [...prev, ...next.filter((n) => !seen.has(n.id))];
+        });
+        setRawOffset((o) => o + rawCount);
+        setHasMore(rawCount === pageSize);
+        setLoadingMore(false);
+        loadingRef.current = false;
+      },
+      { rootMargin: "400px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasMore, rawOffset, pageSize]);
 
   // Approve runs immediately; reject opens the reason modal first.
   const onReview = (id: string, action: "approve" | "reject") => {
@@ -413,7 +467,7 @@ export default function ApprovalsGrid({ items }: { items: PendingItem[] }) {
     await doReview(id, "reject", reason.trim());
   };
 
-  const pending = items.filter((i) => !removed.has(i.id));
+  const pending = list.filter((i) => !removed.has(i.id));
 
   // Rejection-reason modal (design: Figma node 135:371).
   const rejectModal =
@@ -501,6 +555,14 @@ export default function ApprovalsGrid({ items }: { items: PendingItem[] }) {
           />
         ))}
       </div>
+      {hasMore && (
+        <div
+          ref={sentinelRef}
+          className="py-4 text-center text-sm tracking-[-0.03em] text-[#a1a1aa]"
+        >
+          {loadingMore ? "Loading…" : ""}
+        </div>
+      )}
       {rejectModal}
     </>
   );

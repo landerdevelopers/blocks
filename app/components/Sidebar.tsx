@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { ChevronDown, Plus, Minus, User, LogOut, ChevronsUpDown, Search, CirclePlus, ExternalLink, Globe } from "lucide-react";
 import ColorSearch from "./ColorSearch";
 import { ScrollFadeEffect } from "@/components/scroll-fade-effect";
-import { XIcon, InstagramIcon, LinkedinIcon } from "@/components/social-icons";
 import { useAuthStore } from "@/store/authStore";
 import { createClient } from "@/lib/supabase/client";
 
@@ -318,6 +317,7 @@ export default function Sidebar({
   onBecomeCreator,
   onCreatorSelect,
   onCreatorRestoreDone,
+  creatorRestorePending = false,
   sidebarCounts,
 }: {
   cols: number;
@@ -342,6 +342,10 @@ export default function Sidebar({
   // Fired once the ?creator= URL restore resolves (creator found OR not), so the
   // parent can release the gallery from its "restoring" skeleton hold.
   onCreatorRestoreDone?: () => void;
+  // True while a ?creator= param is still resolving to a profile. Drives a
+  // loading placeholder in the creator header/bio so the sidebar never flashes
+  // the "All Creators" default before snapping to the restored creator.
+  creatorRestorePending?: boolean;
   // Pre-aggregated count badges (server-fetched, server-cached).
   sidebarCounts: SidebarCounts;
 }) {
@@ -610,15 +614,23 @@ export default function Sidebar({
                           .toUpperCase()
                       )}
                     </span>
+                  ) : creatorRestorePending ? (
+                    <span className="skeleton-shimmer size-[30px] shrink-0 rounded-md" />
                   ) : (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img alt="" src="/creators.svg" className="size-[30px] shrink-0" />
                   )}
-                  <span className="truncate text-[18px] leading-none tracking-[-0.03em] text-[#09090b]">
-                    {selectedCreator
-                      ? (selectedCreator.full_name ?? selectedCreator.username)
-                      : "All Creators"}
-                  </span>
+                  {selectedCreator ? (
+                    <span className="truncate text-[18px] leading-none tracking-[-0.03em] text-[#09090b]">
+                      {selectedCreator.full_name ?? selectedCreator.username}
+                    </span>
+                  ) : creatorRestorePending ? (
+                    <span className="skeleton-shimmer h-4 w-24 rounded-md" />
+                  ) : (
+                    <span className="truncate text-[18px] leading-none tracking-[-0.03em] text-[#09090b]">
+                      All Creators
+                    </span>
+                  )}
                 </div>
                 <ChevronsUpDown size={18} strokeWidth={1.5} className="shrink-0 text-[#71717b]" />
               </button>
@@ -758,69 +770,84 @@ export default function Sidebar({
                   {selectedCreator.bio ? selectedCreator.bio : "No bio added"}
                 </p>
                 {creatorSocials &&
-                  (creatorSocials.website_url ||
-                    creatorSocials.x_handle ||
-                    creatorSocials.instagram_handle ||
-                    creatorSocials.linkedin_handle ||
-                    creatorSocials.cta_url) && (
-                    <div className="flex flex-wrap items-center justify-center gap-2">
-                      {creatorSocials.website_url && (
-                        <a
-                          href={creatorSocials.website_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label="Website"
-                          className="flex size-8 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
-                        >
-                          <Globe size={16} strokeWidth={1.5} />
-                        </a>
-                      )}
-                      {creatorSocials.x_handle && (
-                        <a
-                          href={`https://x.com/${creatorSocials.x_handle}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label="X"
-                          className="flex size-8 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
-                        >
-                          <XIcon size={14} />
-                        </a>
-                      )}
-                      {creatorSocials.instagram_handle && (
-                        <a
-                          href={`https://instagram.com/${creatorSocials.instagram_handle}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label="Instagram"
-                          className="flex size-8 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
-                        >
-                          <InstagramIcon size={15} />
-                        </a>
-                      )}
-                      {creatorSocials.linkedin_handle && (
-                        <a
-                          href={`https://linkedin.com/in/${creatorSocials.linkedin_handle}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label="LinkedIn"
-                          className="flex size-8 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
-                        >
-                          <LinkedinIcon size={15} />
-                        </a>
-                      )}
-                      {creatorSocials.cta_url && (
-                        <a
-                          href={creatorSocials.cta_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1.5 rounded-full bg-[#09090b] px-3.5 py-1.5 text-[13px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#27272a]"
-                        >
-                          Hire Creator
-                          <ExternalLink size={13} strokeWidth={1.5} />
-                        </a>
-                      )}
-                    </div>
-                  )}
+                  (() => {
+                    // Hire Creator deliberately omitted here. One social → icon +
+                    // label; two or more → icons only, each stretched to fill the
+                    // row evenly. Brand glyphs come from /public.
+                    const socials = [
+                      ...(creatorSocials.website_url
+                        ? [
+                            {
+                              key: "web",
+                              href: creatorSocials.website_url,
+                              label: "Website",
+                              icon: <Globe size={16} strokeWidth={1.5} />,
+                            },
+                          ]
+                        : []),
+                      ...(creatorSocials.x_handle
+                        ? [
+                            {
+                              key: "x",
+                              href: `https://x.com/${creatorSocials.x_handle}`,
+                              label: "X",
+                              // eslint-disable-next-line @next/next/no-img-element
+                              icon: <img src="/x.svg" alt="" className="size-4" />,
+                            },
+                          ]
+                        : []),
+                      ...(creatorSocials.instagram_handle
+                        ? [
+                            {
+                              key: "ig",
+                              href: `https://instagram.com/${creatorSocials.instagram_handle}`,
+                              label: "Instagram",
+                              // eslint-disable-next-line @next/next/no-img-element
+                              icon: <img src="/insta.svg" alt="" className="size-4" />,
+                            },
+                          ]
+                        : []),
+                      ...(creatorSocials.linkedin_handle
+                        ? [
+                            {
+                              key: "li",
+                              href: `https://linkedin.com/in/${creatorSocials.linkedin_handle}`,
+                              label: "LinkedIn",
+                              // eslint-disable-next-line @next/next/no-img-element
+                              icon: <img src="/linkedin.svg" alt="" className="size-4" />,
+                            },
+                          ]
+                        : []),
+                    ];
+                    if (socials.length === 0) return null;
+                    const single = socials.length === 1;
+                    return (
+                      <div className="flex items-center gap-2">
+                        {socials.map((s) => (
+                          <a
+                            key={s.key}
+                            href={s.href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={s.label}
+                            className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-[10px] border border-[#e7e9ee] bg-white text-[#52525b] transition-opacity hover:opacity-90"
+                          >
+                            {s.icon}
+                            {single && (
+                              <span className="text-[13px] font-medium tracking-[-0.03em]">
+                                {s.label}
+                              </span>
+                            )}
+                          </a>
+                        ))}
+                      </div>
+                    );
+                  })()}
+              </div>
+            ) : creatorRestorePending ? (
+              <div className="flex flex-col gap-2">
+                <span className="skeleton-shimmer h-4 w-full rounded-md" />
+                <span className="skeleton-shimmer h-4 w-2/3 rounded-md" />
               </div>
             ) : (
               <div className="flex flex-col gap-0.5">

@@ -5,7 +5,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import { useSearchParams } from "next/navigation";
@@ -21,7 +20,6 @@ import {
   type Profile,
   type GalleryComponent,
 } from "@/store/authStore";
-import { hexToHsl } from "@/lib/utils";
 import { todayIST } from "@/lib/ist";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -57,7 +55,6 @@ function readSuggestUsed(): number {
   }
 }
 
-type Hsl = { h: number; s: number; l: number };
 const HEX6 = /^#[0-9a-fA-F]{6}$/;
 
 const VALID_CATEGORIES = [
@@ -75,32 +72,6 @@ const VALID_CATEGORIES = [
 // the URL (see the effect below), so no localStorage fallback is needed here.
 function resolveCategory(urlCat: string | null): string {
   return urlCat && VALID_CATEGORIES.includes(urlCat) ? urlCat : "website";
-}
-
-// Family-aware HSL match: does a component color `el` match the search color `s`?
-// Mode is decided from the SEARCH color, mirroring the old search_by_color RPC:
-//   dark/light (l<20 or l>80) or gray (s<10) → lightness only; else hue family.
-function hslMatch(el: Hsl, s: Hsl): boolean {
-  if (s.l < 20 || s.l > 80) return Math.abs(el.l - s.l) <= 15;
-  if (s.s < 10) return Math.abs(el.l - s.l) <= 20;
-  const hueDist = Math.min(Math.abs(el.h - s.h), 360 - Math.abs(el.h - s.h));
-  return (
-    hueDist <= 30 && Math.abs(el.s - s.s) <= 55 && Math.abs(el.l - s.l) <= 40
-  );
-}
-
-// Best pct among a component's colors that match `search`; -1 = no match.
-function bestMatchPct(
-  colors: { hex: string; pct: number | null }[] | null,
-  search: Hsl,
-): number {
-  let best = -1;
-  for (const c of colors ?? []) {
-    if (HEX6.test(c.hex) && hslMatch(hexToHsl(c.hex), search)) {
-      best = Math.max(best, c.pct ?? 0);
-    }
-  }
-  return best;
 }
 
 export default function HomeClient({
@@ -198,39 +169,15 @@ function HomeInner({
   );
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
 
-  // Color search — overrides the normal gallery list when active. Runs fully
-  // client-side over a prefetched pool (no per-search network round-trip).
+  // Color search — overrides the normal gallery list when active. Matching runs
+  // SERVER-side (search_by_color RPC) so the whole catalog isn't shipped to the
+  // client; the RPC returns only the matching rows, scored + sorted, capped.
   const [colorSearchActive, setColorSearchActive] = useState(false);
   const [colorSearchLoading, setColorSearchLoading] = useState(false);
   const [colorSearchPage, setColorSearchPage] = useState(0);
-  // Full, scored, sorted results across every category. Narrowed to the active
-  // category/section at display time so changing filters is instant.
+  // Matching results across every category (from the RPC). Narrowed to the
+  // active category/section at display time so changing filters is instant.
   const [colorSearchAll, setColorSearchAll] = useState<GalleryComponent[]>([]);
-
-  // Color-search pool: ALL published components (lightweight columns, no
-  // figma_data) loaded once and held in a ref — never in the main store. Fetched
-  // in the background when the picker opens, so Search is instant.
-  const colorSearchPool = useRef<GalleryComponent[]>([]);
-  const colorSearchPoolLoaded = useRef(false);
-  const colorSearchPoolPromise = useRef<Promise<void> | null>(null);
-
-  const loadColorSearchPool = useCallback(() => {
-    if (colorSearchPoolLoaded.current) return Promise.resolve();
-    if (colorSearchPoolPromise.current) return colorSearchPoolPromise.current;
-    colorSearchPoolPromise.current = (async () => {
-      const { data } = await createClient()
-        .from("components")
-        .select(
-          "id, category, section, filters, preview_url, aspect_ratio, colors, colors_hsl",
-        )
-        .eq("is_published", true)
-        .eq("is_private", false)
-        .order("created_at", { ascending: false });
-      colorSearchPool.current = (data as unknown as GalleryComponent[]) ?? [];
-      colorSearchPoolLoaded.current = true;
-    })();
-    return colorSearchPoolPromise.current;
-  }, []);
 
   const COLOR_PAGE_SIZE = 24;
 
@@ -286,9 +233,8 @@ function HomeInner({
     setColorSearchPage((p) => p + 1);
   }, []);
 
-  // Run the color search fully client-side over the prefetched pool: score each
-  // component by summed matched pct (union over the picked colors) so ones
-  // hitting both rank highest. No network call — instant once the pool is loaded.
+  // Run the color search via the RPC — matching + scoring + sorting happen in
+  // Postgres (using precomputed colors_hsl); only the matching rows come back.
   const runColorSearch = async (hexes: string[]) => {
     const picked = hexes.slice(0, 2).filter((h) => HEX6.test(h));
     setColorSearchActive(true);
@@ -298,23 +244,10 @@ function HomeInner({
       return;
     }
     setColorSearchLoading(true);
-    await loadColorSearchPool(); // instant if already prefetched on picker open
-    const searchHsls = picked.map(hexToHsl);
-    const scored: { c: GalleryComponent; score: number }[] = [];
-    for (const c of colorSearchPool.current) {
-      let score = 0;
-      let hit = false;
-      for (const sh of searchHsls) {
-        const p = bestMatchPct(c.colors, sh);
-        if (p >= 0) {
-          hit = true;
-          score += p;
-        }
-      }
-      if (hit) scored.push({ c, score });
-    }
-    scored.sort((a, b) => b.score - a.score);
-    setColorSearchAll(scored.map((x) => x.c));
+    const { data } = await createClient().rpc("search_by_color", {
+      search_hexes: picked,
+    });
+    setColorSearchAll((data as unknown as GalleryComponent[]) ?? []);
     setColorSearchLoading(false);
   };
 
@@ -498,11 +431,11 @@ function HomeInner({
         minCols={activeCategory === "logos" ? 2 : 1}
         onColorSearch={runColorSearch}
         onColorClear={clearColorSearch}
-        onColorPickerOpen={loadColorSearchPool}
         activeCategory={activeCategory}
         onBecomeCreator={becomeCreator}
         onCreatorSelect={setCreatorId}
         onCreatorRestoreDone={() => setCreatorRestorePending(false)}
+        creatorRestorePending={creatorRestorePending}
         sidebarCounts={initialSidebarCounts}
       />
       {/* Gallery panel — rounded top-left corner; the banner scrolls with the

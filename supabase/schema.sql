@@ -996,12 +996,13 @@ begin
     raise exception 'Custom CTA link must be a valid https:// link';
   end if;
 
+  -- Clamp lengths server-side (defense against oversized payloads / bloat).
   update public.profiles set
-    x_handle         = vx,
-    instagram_handle = vi,
-    linkedin_handle  = vl,
-    website_url      = vw,
-    cta_url          = vc
+    x_handle         = left(vx, 50),
+    instagram_handle = left(vi, 50),
+    linkedin_handle  = left(vl, 100),
+    website_url      = left(vw, 400),
+    cta_url          = left(vc, 400)
   where id = uid;
 
   return json_build_object('success', true);
@@ -1396,7 +1397,8 @@ begin
   ) then
     return false;
   end if;
-  update profiles set bio = nullif(btrim(new_bio), '') where id = target;
+  update profiles set bio = nullif(btrim(left(coalesce(new_bio, ''), 280)), '')
+  where id = target;
   return true;
 end;
 $$;
@@ -1574,6 +1576,8 @@ as $$
   group by c.uploaded_by;
 $$;
 grant execute on function public.get_creator_counts(uuid[]) to service_role;
+revoke execute on function public.get_creator_counts(uuid[])
+  from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- RPC: get_creator_sidebar_counts(creator_id) — category / section / logo-letter
@@ -1652,6 +1656,12 @@ as $$
   group by ce.user_id
   order by max(ce.copied_at) desc;
 $$;
+-- Admin-only: lock to the service-role client (the analytics page). Without the
+-- explicit service_role grant the revoke would also strip the default PUBLIC
+-- access it relies on, so grant first, then revoke from everyone else.
+grant execute on function public.get_per_user_activity(date) to service_role;
+revoke execute on function public.get_per_user_activity(date)
+  from public, anon, authenticated;
 
 -- get_analytics_windows(d_today, d_start7, d_date) — all KPI windows in a single
 -- round trip as a JSON object keyed by window ('today','7d','all', and 'date'
@@ -1748,6 +1758,11 @@ begin
   return result;
 end;
 $$;
+-- Admin-only: lock to the service-role client (analytics page). Grant first,
+-- then revoke the default PUBLIC access.
+grant execute on function public.get_analytics_windows(date, date, date) to service_role;
+revoke execute on function public.get_analytics_windows(date, date, date)
+  from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- get_component_detail(p_id) — one component (NO figma_data) joined with its
@@ -1864,3 +1879,181 @@ as $$
   where p.id = p_id;
 $$;
 grant execute on function public.get_creator_by_id(uuid) to anon, authenticated;
+
+-- Speeds the status-filtered aggregate counts (approval analytics) at scale.
+create index if not exists components_status_idx on public.components (status);
+
+-- ---------------------------------------------------------------------------
+-- get_approval_stats(d_today, d_start7) — moderation pipeline totals per window
+-- (today / last-7-days / all-time) for the admin approvals analytics. Scoped to
+-- CREATOR submissions (uploaders with an approved creator application); admin
+-- uploads bypass moderation and are excluded. Windowed by the submission's IST
+-- creation day. Aggregated in-DB; called via the service-role client.
+-- ---------------------------------------------------------------------------
+drop function if exists public.get_approval_stats();
+create or replace function public.get_approval_stats(d_today date, d_start7 date)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with sub as (
+    select
+      c.status,
+      c.uploaded_by,
+      (c.created_at at time zone 'Asia/Kolkata')::date as d
+    from public.components c
+    where c.uploaded_by in (
+      select user_id from public.creator_applications where status = 'approved'
+    )
+  )
+  select jsonb_build_object(
+    'today', (
+      select jsonb_build_object(
+        'total', count(*),
+        'approved', count(*) filter (where status = 'approved'),
+        'rejected', count(*) filter (where status = 'rejected'),
+        'pending', count(*) filter (where status = 'pending'),
+        'creators_uploaded', count(distinct uploaded_by)
+      ) from sub where d = d_today),
+    '7d', (
+      select jsonb_build_object(
+        'total', count(*),
+        'approved', count(*) filter (where status = 'approved'),
+        'rejected', count(*) filter (where status = 'rejected'),
+        'pending', count(*) filter (where status = 'pending'),
+        'creators_uploaded', count(distinct uploaded_by)
+      ) from sub where d between d_start7 and d_today),
+    'all', (
+      select jsonb_build_object(
+        'total', count(*),
+        'approved', count(*) filter (where status = 'approved'),
+        'rejected', count(*) filter (where status = 'rejected'),
+        'pending', count(*) filter (where status = 'pending'),
+        'creators_uploaded', count(distinct uploaded_by)
+      ) from sub)
+  );
+$$;
+grant execute on function public.get_approval_stats(date, date) to service_role;
+revoke execute on function public.get_approval_stats(date, date)
+  from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- get_application_stats(d_today, d_start7) — Creator Program application counts
+-- per window (today / 7d / all), windowed by the application's IST creation day.
+-- ---------------------------------------------------------------------------
+create or replace function public.get_application_stats(d_today date, d_start7 date)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with a as (
+    select status, (created_at at time zone 'Asia/Kolkata')::date as d
+    from public.creator_applications
+  )
+  select jsonb_build_object(
+    'today', (
+      select jsonb_build_object(
+        'total', count(*),
+        'pending', count(*) filter (where status = 'pending'),
+        'approved', count(*) filter (where status = 'approved'),
+        'rejected', count(*) filter (where status = 'rejected')
+      ) from a where d = d_today),
+    '7d', (
+      select jsonb_build_object(
+        'total', count(*),
+        'pending', count(*) filter (where status = 'pending'),
+        'approved', count(*) filter (where status = 'approved'),
+        'rejected', count(*) filter (where status = 'rejected')
+      ) from a where d between d_start7 and d_today),
+    'all', (
+      select jsonb_build_object(
+        'total', count(*),
+        'pending', count(*) filter (where status = 'pending'),
+        'approved', count(*) filter (where status = 'approved'),
+        'rejected', count(*) filter (where status = 'rejected')
+      ) from a)
+  );
+$$;
+grant execute on function public.get_application_stats(date, date) to service_role;
+revoke execute on function public.get_application_stats(date, date)
+  from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- search_by_color(search_hexes) — server-side color search. Matches published,
+-- public components against 1–2 picked colors using the precomputed colors_hsl
+-- (falls back to converting colors[].hex for legacy rows). Match mode is decided
+-- per SEARCH color: very dark/light → lightness ±15; gray → lightness ±20; else
+-- hue family (±30° circular, sat ±55, light ±40) — mirrors the old client logic.
+-- Score = sum of best matched pct per search color (a row hitting both ranks
+-- highest). Returns ONLY grant-safe columns (NO figma_data, NO colors_hsl),
+-- top 300 by score. Replaces pulling the whole catalog to the client.
+-- ---------------------------------------------------------------------------
+create or replace function public.search_by_color(search_hexes text[])
+returns table (
+  id           uuid,
+  category     text,
+  section      text,
+  filters      text[],
+  preview_url  text,
+  aspect_ratio numeric,
+  colors       jsonb
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with searches as (
+    select
+      u.idx,
+      h.hsl[1] as sh, h.hsl[2] as ss, h.hsl[3] as sl,
+      (h.hsl[3] < 20 or h.hsl[3] > 80) as dark_light,
+      (h.hsl[2] < 10) as gray
+    from unnest(search_hexes) with ordinality as u(hex, idx)
+    cross join lateral (select public.hsl_from_hex(u.hex) as hsl) h
+    where h.hsl is not null
+  ),
+  matches as (
+    select c.id, sr.idx, max((elem ->> 'pct')::numeric) as pct
+    from public.components c
+    cross join lateral
+      jsonb_array_elements(coalesce(c.colors_hsl, c.colors)) as elem
+    cross join lateral (
+      select case
+        when elem ? 'h' then array[
+          (elem ->> 'h')::numeric, (elem ->> 's')::numeric, (elem ->> 'l')::numeric
+        ]
+        else public.hsl_from_hex(elem ->> 'hex')
+      end as eh
+    ) ev
+    cross join searches sr
+    where c.is_published = true
+      and c.is_private = false
+      and coalesce(c.colors_hsl, c.colors) is not null
+      and jsonb_typeof(coalesce(c.colors_hsl, c.colors)) = 'array'
+      and ev.eh is not null
+      and (
+        case
+          when sr.dark_light then abs(ev.eh[3] - sr.sl) <= 15
+          when sr.gray       then abs(ev.eh[3] - sr.sl) <= 20
+          else least(abs(ev.eh[1] - sr.sh), 360 - abs(ev.eh[1] - sr.sh)) <= 30
+               and abs(ev.eh[2] - sr.ss) <= 55
+               and abs(ev.eh[3] - sr.sl) <= 40
+        end
+      )
+    group by c.id, sr.idx
+  ),
+  scored as (
+    select id, sum(pct) as score from matches group by id
+  )
+  select c.id, c.category, c.section, c.filters, c.preview_url, c.aspect_ratio, c.colors
+  from scored s
+  join public.components c on c.id = s.id
+  order by s.score desc nulls last
+  limit 300;
+$$;
+grant execute on function public.search_by_color(text[]) to anon, authenticated;

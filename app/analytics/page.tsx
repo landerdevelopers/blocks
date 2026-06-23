@@ -8,6 +8,13 @@ import AnalyticsView, {
   type AnalyticsData,
 } from "./AnalyticsView";
 
+// Render on the server for EVERY request and send the document with no-store —
+// a normal browser refresh must reflect the latest copies, not replay a cached
+// payload (which previously only a hard refresh / ctrl+shift+R would bust). The
+// heavy all-time aggregates stay behind unstable_cache (60s) for cost; the page
+// itself is never HTTP/route-cached.
+export const dynamic = "force-dynamic";
+
 // Must be a server-side value: importing a runtime value from the "use client"
 // AnalyticsView module would yield a client-reference proxy, not the array.
 const CATEGORIES = [
@@ -110,7 +117,11 @@ const getCachedOverview = unstable_cache(
   // Bump the version suffix whenever the cached shape changes (e.g. dau added) so
   // stale entries from a prior deploy don't surface fields the new code expects.
   ["analytics-overview-v2"],
-  { revalidate: 60 },
+  // Tagged so the in-page Refresh button can bust it on demand (revalidateTag).
+  // The 5-min window is just a safety net behind that manual refresh; the cache
+  // key already includes `today`, so it rolls over on its own at the IST date
+  // boundary. Heavy all-time scans stay cheap between refreshes.
+  { revalidate: 300, tags: ["analytics"] },
 );
 
 // Fetch everything the view streams in. Kicked off (not awaited) by the page so

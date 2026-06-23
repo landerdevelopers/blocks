@@ -16,6 +16,14 @@ export function todayIST(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+// Shift a "YYYY-MM-DD" string by `delta` days (UTC calendar math).
+export function addDays(ymd: string, delta: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + delta);
+  return dt.toISOString().slice(0, 10);
+}
+
 // Time left until the next 00:00 IST, as whole hours + minutes.
 export function timeUntilMidnightIST(): { h: number; m: number } {
   const d = istNow();

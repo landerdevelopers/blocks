@@ -610,7 +610,14 @@ export default function UploadForm({
           type="file"
           accept="image/png,image/jpeg,image/webp"
           className="hidden"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => {
+            // Only replace when a file is actually picked — cancelling the
+            // dialog must keep the current/last image, not clear it.
+            const f = e.target.files?.[0];
+            if (f) setFile(f);
+            // Reset so re-picking the SAME file still fires change next time.
+            e.target.value = "";
+          }}
         />
       </div>
 

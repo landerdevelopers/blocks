@@ -1,103 +1,46 @@
 import Link from "next/link";
 import { createAdminClient } from "@/lib/supabase/admin";
-import ApprovalsGrid, { type PendingItem } from "./ApprovalsGrid";
+import { todayIST, addDays } from "@/lib/ist";
+import StatsTabs from "../StatsTabs";
+import ApprovalsGrid from "./ApprovalsGrid";
+import AdminBackLink from "../AdminBackLink";
+import {
+  APPROVAL_PAGE_SIZE,
+  fetchApprovalPage,
+  buildApprovalItems,
+} from "./data";
 
-// Admin-only (gated by middleware). Shows every creator design awaiting review
-// (status = 'pending') so an admin can approve or reject each one.
+type WindowStats = Record<"today" | "7d" | "all", Record<string, number>>;
+
+// Admin-only (gated by middleware). Pending-review queue, server-paginated
+// (first page here, the rest via a load-more server action).
 export const dynamic = "force-dynamic";
-
-type CompRow = {
-  id: string;
-  category: string | null;
-  section: string | null;
-  filters: string[] | null;
-  colors: { hex: string; pct: number | null }[] | null;
-  preview_url: string | null;
-  aspect_ratio: number | null;
-  created_at: string;
-  uploaded_by: string | null;
-  reuploaded: boolean | null;
-};
 
 export default async function AdminApprovalsPage() {
   const admin = createAdminClient();
-
-  // Pending designs, newest first. Service-role client bypasses RLS (admins
-  // have no select policy for other creators' unpublished rows).
-  const { data: compData } = await admin
-    .from("components")
-    // figma_data (the table's largest column — full Figma clipboard HTML) is
-    // NOT pulled here; it's fetched on demand via get_component_figma_data when
-    // the reviewer clicks Copy to Figma. Keeps this list query light.
-    .select(
-      "id, category, section, filters, colors, preview_url, aspect_ratio, created_at, uploaded_by, reuploaded",
-    )
-    .eq("status", "pending")
-    .order("created_at", { ascending: false });
-
-  const comps = (compData as CompRow[]) ?? [];
-  const uids = [
-    ...new Set(comps.map((c) => c.uploaded_by).filter(Boolean)),
-  ] as string[];
-
-  // Creator name / avatar / handle / role for each design's uploader.
-  const profileMap = new Map<
-    string,
-    {
-      name: string | null;
-      avatar: string | null;
-      username: string | null;
-      role: string | null;
-    }
-  >();
-  if (uids.length) {
-    const { data } = await admin
-      .from("profiles")
-      .select("id, full_name, avatar_url, username, role")
-      .in("id", uids);
-    for (const p of data ?? []) {
-      profileMap.set(p.id as string, {
-        name: (p.full_name as string) ?? null,
-        avatar: (p.avatar_url as string) ?? null,
-        username: (p.username as string) ?? null,
-        role: (p.role as string) ?? null,
-      });
-    }
-  }
-
-  // Only show submissions from creators — admin uploads also default to
-  // status='pending' but are published directly, never reviewed here.
-  const items: PendingItem[] = comps
-    .filter((c) => profileMap.get(c.uploaded_by ?? "")?.role === "creator")
-    .map((c) => {
-    const prof = profileMap.get(c.uploaded_by ?? "");
-    return {
-      id: c.id,
-      category: c.category,
-      section: c.section,
-      filters: c.filters,
-      colors: c.colors,
-      preview_url: c.preview_url,
-      aspect_ratio: c.aspect_ratio,
-      created_at: c.created_at,
-      creatorName: prof?.name ?? "Unknown",
-      creatorAvatar: prof?.avatar ?? null,
-      creatorUsername: prof?.username ?? null,
-      reuploaded: !!c.reuploaded,
-    };
-  });
+  const today = todayIST();
+  const start7 = addDays(today, -6);
+  const [firstRows, { data: statsRaw }] = await Promise.all([
+    fetchApprovalPage(0),
+    admin.rpc("get_approval_stats", { d_today: today, d_start7: start7 }),
+  ]);
+  const apprWindows = (statsRaw as WindowStats | null) ?? null;
+  const { items } = await buildApprovalItems(firstRows);
+  const initialHasMore = firstRows.length === APPROVAL_PAGE_SIZE;
+  const pendingCount = apprWindows?.all?.pending ?? items.length;
 
   return (
     <main className="min-h-screen bg-[#f5f5f5] px-6 py-9 text-[#09090b] tracking-[-0.01em]">
       <div className="mx-auto flex w-full max-w-[1280px] flex-col gap-6">
+        <AdminBackLink />
         <header className="flex items-center justify-between">
           <div className="flex flex-col gap-1">
             <h1 className="text-[26px] font-semibold tracking-[-0.04em]">
               Design Approvals
             </h1>
             <p className="text-sm tracking-[-0.03em] text-[#71717b]">
-              {items.length.toLocaleString()} design
-              {items.length === 1 ? "" : "s"} awaiting review
+              {pendingCount.toLocaleString()} design
+              {pendingCount === 1 ? "" : "s"} awaiting review
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -116,7 +59,24 @@ export default async function AdminApprovalsPage() {
           </div>
         </header>
 
-        <ApprovalsGrid items={items} />
+        {/* Moderation analytics (creator submissions) — today / 7d / all-time. */}
+        <StatsTabs
+          windows={apprWindows}
+          cards={[
+            { key: "total", label: "Total submitted", color: "#09090b" },
+            { key: "approved", label: "Approved", color: "#1c9a00" },
+            { key: "rejected", label: "Rejected", color: "#ef4444" },
+            { key: "pending", label: "Pending", color: "#ca8000" },
+            { key: "creators_uploaded", label: "Creators uploaded", color: "#2974ff" },
+          ]}
+        />
+
+        <ApprovalsGrid
+          items={items}
+          initialHasMore={initialHasMore}
+          initialRawOffset={firstRows.length}
+          pageSize={APPROVAL_PAGE_SIZE}
+        />
       </div>
     </main>
   );

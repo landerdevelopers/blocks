@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, use, useState } from "react";
+import { Suspense, use, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { RefreshCw } from "lucide-react";
 import { cloudflareThumb } from "@/lib/utils";
 import PerUserActivity from "./PerUserActivity";
+import { refreshAnalytics } from "./actions";
 
 export const CATEGORIES = [
   "Website",
@@ -71,6 +74,16 @@ export default function AnalyticsView({
   // Tabs switch instantly client-side (data for all three is already loaded).
   // The date view comes from the server (?date=…) and can't be prefetched.
   const [view, setView] = useState<View>(initialDate ? "date" : "today");
+  const router = useRouter();
+  // Manual refresh: bust the cached overview server-side, then re-render. The
+  // transition keeps the CURRENT numbers on screen (no skeleton flash) until the
+  // fresh data lands — so it "shows the previous one" while fetching.
+  const [refreshing, startRefresh] = useTransition();
+  const onRefresh = () =>
+    startRefresh(async () => {
+      await refreshAnalytics();
+      router.refresh();
+    });
 
   const rangeLabel = view === "date" ? (initialDate ?? "") : TABS[view];
 
@@ -99,6 +112,21 @@ export default function AnalyticsView({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={refreshing}
+              aria-label="Refresh data"
+              title="Refresh data"
+              className="flex size-9 cursor-pointer items-center justify-center rounded-xl border border-[#e7e9ee] bg-white text-[#52525b] shadow-[0px_1px_2px_rgba(0,0,0,0.04)] transition-colors hover:bg-[#f5f5f5] hover:text-[#09090b] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <RefreshCw
+                size={16}
+                strokeWidth={2}
+                className={refreshing ? "animate-spin" : ""}
+              />
+            </button>
+
             <div className="flex gap-1 rounded-xl border border-[#e7e9ee] bg-white p-1 shadow-[0px_1px_2px_rgba(0,0,0,0.04)]">
               {(Object.keys(TABS) as (keyof typeof TABS)[]).map((r) => (
                 <button

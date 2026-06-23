@@ -22,7 +22,6 @@ import {
   Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { XIcon, InstagramIcon, LinkedinIcon } from "@/components/social-icons";
 import { revalidateSidebarCounts } from "@/app/actions";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 import {
@@ -1109,63 +1108,82 @@ export default function Gallery({
                       detail.creator_linkedin_handle ||
                       detail.creator_cta_url) && (
                       <div className="flex flex-col gap-2.5">
-                        {(detail.creator_website_url ||
-                          detail.creator_x_handle ||
-                          detail.creator_instagram_handle ||
-                          detail.creator_linkedin_handle) && (
-                          <div className="flex gap-1.5">
-                            {detail.creator_website_url && (
-                              <a
-                                href={detail.creator_website_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                aria-label="Website"
-                                className="flex min-h-9 flex-1 items-center justify-center rounded-full bg-[#f4f4f6] text-[#52525b] transition-colors hover:text-black"
-                              >
-                                <Globe size={17} strokeWidth={1.5} />
-                              </a>
-                            )}
-                            {detail.creator_x_handle && (
-                              <a
-                                href={`https://x.com/${detail.creator_x_handle}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                aria-label="X"
-                                className="flex min-h-9 flex-1 items-center justify-center rounded-full bg-[#f4f4f6] text-[#52525b] transition-colors hover:text-black"
-                              >
-                                <XIcon size={15} />
-                              </a>
-                            )}
-                            {detail.creator_instagram_handle && (
-                              <a
-                                href={`https://instagram.com/${detail.creator_instagram_handle}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                aria-label="Instagram"
-                                className="flex min-h-9 flex-1 items-center justify-center rounded-full bg-[#f4f4f6] text-[#52525b] transition-colors hover:text-black"
-                              >
-                                <InstagramIcon size={16} />
-                              </a>
-                            )}
-                            {detail.creator_linkedin_handle && (
-                              <a
-                                href={
-                                  detail.creator_linkedin_handle.startsWith(
-                                    "http",
-                                  )
-                                    ? detail.creator_linkedin_handle
-                                    : `https://linkedin.com/in/${detail.creator_linkedin_handle}`
-                                }
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                aria-label="LinkedIn"
-                                className="flex min-h-9 flex-1 items-center justify-center rounded-full bg-[#f4f4f6] text-[#52525b] transition-colors hover:text-black"
-                              >
-                                <LinkedinIcon size={16} />
-                              </a>
-                            )}
-                          </div>
-                        )}
+                        {(() => {
+                          // One social → icon + label; two or more → icons only,
+                          // each stretched to fill the row evenly. Brand glyphs
+                          // come from /public; white bg, hover dims to 90%.
+                          const li = detail.creator_linkedin_handle;
+                          const socials = [
+                            ...(detail.creator_website_url
+                              ? [
+                                  {
+                                    key: "web",
+                                    href: detail.creator_website_url,
+                                    label: "Website",
+                                    icon: <Globe size={17} strokeWidth={1.5} />,
+                                  },
+                                ]
+                              : []),
+                            ...(detail.creator_x_handle
+                              ? [
+                                  {
+                                    key: "x",
+                                    href: `https://x.com/${detail.creator_x_handle}`,
+                                    label: "X",
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    icon: <img src="/x.svg" alt="" className="size-[18px]" />,
+                                  },
+                                ]
+                              : []),
+                            ...(detail.creator_instagram_handle
+                              ? [
+                                  {
+                                    key: "ig",
+                                    href: `https://instagram.com/${detail.creator_instagram_handle}`,
+                                    label: "Instagram",
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    icon: <img src="/insta.svg" alt="" className="size-[18px]" />,
+                                  },
+                                ]
+                              : []),
+                            ...(li
+                              ? [
+                                  {
+                                    key: "li",
+                                    href: li.startsWith("http")
+                                      ? li
+                                      : `https://linkedin.com/in/${li}`,
+                                    label: "LinkedIn",
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    icon: <img src="/linkedin.svg" alt="" className="size-[18px]" />,
+                                  },
+                                ]
+                              : []),
+                          ];
+                          if (socials.length === 0) return null;
+                          const single = socials.length === 1;
+                          return (
+                            <div className="flex gap-1.5">
+                              {socials.map((s) => (
+                                <a
+                                  key={s.key}
+                                  href={s.href}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  aria-label={s.label}
+                                  className="flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-[10px] border border-[#e7e9ee] bg-white text-[#52525b] transition-opacity hover:opacity-90"
+                                >
+                                  {s.icon}
+                                  {single && (
+                                    <span className="text-[13px] font-medium tracking-[-0.03em]">
+                                      {s.label}
+                                    </span>
+                                  )}
+                                </a>
+                              ))}
+                            </div>
+                          );
+                        })()}
                         {detail.creator_cta_url && (
                           <a
                             href={detail.creator_cta_url}
