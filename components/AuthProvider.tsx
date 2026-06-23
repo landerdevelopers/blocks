@@ -19,6 +19,7 @@ export default function AuthProvider({
   const showOnboarding = useAuthStore((s) => s.showOnboarding);
   const profile = useAuthStore((s) => s.profile);
   const setPendingCreatorApp = useAuthStore((s) => s.setPendingCreatorApp);
+  const setWasCreator = useAuthStore((s) => s.setWasCreator);
 
   // Approved creators who haven't picked a handle yet get the forced username
   // modal — but only after name onboarding (if any) is done. The signal is an
@@ -85,11 +86,15 @@ export default function AuthProvider({
       }
 
       // Still missing after retries → create it ourselves, then onboard.
+      // ignoreDuplicates → ON CONFLICT DO NOTHING, so a row that appears mid-race
+      // can't push this into a DO-UPDATE that would need UPDATE on `id` (which
+      // the column-scoped grant withholds → "permission denied for table
+      // profiles"). Pure insert path; no id is ever updated here.
       const { data: created } = await supabase
         .from("profiles")
-        .upsert({ id: userId, full_name: null })
+        .upsert({ id: userId, full_name: null }, { ignoreDuplicates: true })
         .select("*")
-        .single();
+        .maybeSingle();
       if (created) setProfile(created as Profile);
       setShowOnboarding(true);
     };
@@ -100,15 +105,20 @@ export default function AuthProvider({
       if (session?.user) {
         setEmail(session.user.email ?? null);
         loadProfile(session.user.id);
-        // Prefetch the pending-application flag so the "Become a Creator" CTA
-        // (account modal + sidebar) renders instantly, not 1-2s after open.
+        // Prefetch the application flags so the "Become a Creator" CTA (account
+        // modal + sidebar) renders instantly, not 1-2s after open. One read for
+        // both: pending hides the CTA while in review; approved hides it for an
+        // existing/revoked creator (so a revoked creator isn't re-prompted).
         supabase
           .from("creator_applications")
-          .select("id")
+          .select("status")
           .eq("user_id", session.user.id)
-          .eq("status", "pending")
-          .limit(1)
-          .then(({ data }) => setPendingCreatorApp(!!data?.length));
+          .in("status", ["pending", "approved"])
+          .then(({ data }) => {
+            const rows = (data as { status: string }[] | null) ?? [];
+            setPendingCreatorApp(rows.some((r) => r.status === "pending"));
+            setWasCreator(rows.some((r) => r.status === "approved"));
+          });
         // Log a login on an actual sign-in (not INITIAL_SESSION / refresh).
         // Fire-and-forget — analytics-only, must never block auth. Upsert with
         // ignoreDuplicates → at most one row per user per IST day (dedup via the
@@ -128,6 +138,7 @@ export default function AuthProvider({
         setProfile(null);
         setEmail(null);
         setPendingCreatorApp(null);
+        setWasCreator(null);
       }
     });
 

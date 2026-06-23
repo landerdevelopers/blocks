@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Plus, Minus, User, LogOut, ChevronsUpDown, Search, CirclePlus, ExternalLink } from "lucide-react";
+import { ChevronDown, Plus, Minus, User, LogOut, ChevronsUpDown, Search, CirclePlus, ExternalLink, Globe } from "lucide-react";
 import ColorSearch from "./ColorSearch";
 import { ScrollFadeEffect } from "@/components/scroll-fade-effect";
+import { XIcon, InstagramIcon, LinkedinIcon } from "@/components/social-icons";
 import { useAuthStore } from "@/store/authStore";
 import { createClient } from "@/lib/supabase/client";
 
@@ -316,6 +317,7 @@ export default function Sidebar({
   activeCategory,
   onBecomeCreator,
   onCreatorSelect,
+  onCreatorRestoreDone,
   sidebarCounts,
 }: {
   cols: number;
@@ -337,6 +339,9 @@ export default function Sidebar({
   // A creator was picked (id) or cleared (null) — parent filters the gallery to
   // that creator's components.
   onCreatorSelect?: (creatorId: string | null) => void;
+  // Fired once the ?creator= URL restore resolves (creator found OR not), so the
+  // parent can release the gallery from its "restoring" skeleton hold.
+  onCreatorRestoreDone?: () => void;
   // Pre-aggregated count badges (server-fetched, server-cached).
   sidebarCounts: SidebarCounts;
 }) {
@@ -344,10 +349,14 @@ export default function Sidebar({
   const profile = useAuthStore((s) => s.profile);
   const authLoading = useAuthStore((s) => s.authLoading);
 
-  // The signed-in user's own creator handle. Only set once an approved creator
-  // (or admin) has completed username onboarding → drives the "Open Creator
-  // Portal" footer button.
-  const myUsername = profile?.username ?? null;
+  // The signed-in user's own creator handle — drives the "Open Creator Portal"
+  // footer button. Only for an active creator (or admin); a user whose access
+  // was revoked keeps their username but should no longer see the button (and
+  // middleware would block the portal anyway).
+  const myUsername =
+    profile?.role === "creator" || profile?.role === "admin"
+      ? (profile?.username ?? null)
+      : null;
 
   // Creators popup (anchored to the "All Creators" row). Creators are loaded
   // once when the popup first opens (list_creators RPC).
@@ -356,6 +365,46 @@ export default function Sidebar({
   // Selected creator — drives the sidebar header/bio AND, via onCreatorSelect,
   // filters the gallery to just their designs.
   const [selectedCreator, setSelectedCreator] = useState<Creator | null>(null);
+  // Selected creator's socials/CTA (list_creators doesn't carry them) — fetched
+  // via get_creator when a creator is picked, shown under their bio.
+  const [creatorSocials, setCreatorSocials] = useState<{
+    x_handle: string | null;
+    instagram_handle: string | null;
+    linkedin_handle: string | null;
+    website_url: string | null;
+    cta_url: string | null;
+  } | null>(null);
+  // Extract the socials/CTA fields out of a get_creator result.
+  const socialsFrom = (d: Record<string, string | null>) => ({
+    x_handle: d.x_handle ?? null,
+    instagram_handle: d.instagram_handle ?? null,
+    linkedin_handle: d.linkedin_handle ?? null,
+    website_url: d.website_url ?? null,
+    cta_url: d.cta_url ?? null,
+  });
+  // Username we already hold socials for — lets the effect below skip a fetch
+  // when socials were seeded elsewhere (e.g. the URL-restore path, which already
+  // called get_creator). Prevents a duplicate get_creator on load.
+  const socialsLoadedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedCreator) {
+      setCreatorSocials(null);
+      return;
+    }
+    // Already have this creator's socials (seeded by restore) → no refetch.
+    if (socialsLoadedFor.current === selectedCreator.username) return;
+    let alive = true;
+    createClient()
+      .rpc("get_creator", { uname: selectedCreator.username })
+      .then(({ data }) => {
+        if (!alive || !data) return;
+        setCreatorSocials(socialsFrom(data as Record<string, string | null>));
+        socialsLoadedFor.current = selectedCreator.username;
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedCreator]);
   // Real creators, loaded once the first time the popup opens (list_creators).
   const [creators, setCreators] = useState<Creator[]>([]);
   const [creatorsLoaded, setCreatorsLoaded] = useState(false);
@@ -372,13 +421,100 @@ export default function Sidebar({
     (c.full_name ?? c.username).toLowerCase().includes(creatorQuery.toLowerCase()),
   );
 
-  // Pick a creator (or clear back to All Creators) — updates the sidebar UI and
-  // tells the parent to filter the gallery.
+  // When a creator is selected, the prop counts (global, server-cached) are
+  // wrong — the gallery only shows that creator's published designs. Recompute
+  // the badge counts client-side from their published components and use those
+  // instead. Cleared back to the global prop when no creator is selected.
+  const [creatorCounts, setCreatorCounts] = useState<SidebarCounts | null>(null);
+  // Recompute when a component is added/removed (delete in the gallery) too.
+  const componentsVersion = useAuthStore((s) => s.componentsVersion);
+  useEffect(() => {
+    if (!selectedCreator) {
+      setCreatorCounts(null);
+      return;
+    }
+    let alive = true;
+    // Aggregated in-DB (get_creator_sidebar_counts) instead of pulling every one
+    // of the creator's component rows to tally in JS.
+    createClient()
+      .rpc("get_creator_sidebar_counts", { creator_id: selectedCreator.id })
+      .then(({ data }) => {
+        if (!alive || !data) return;
+        setCreatorCounts(data as SidebarCounts);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedCreator, componentsVersion]);
+
+  // Badge source: creator-scoped when one is selected, else the global prop.
+  const counts = creatorCounts ?? sidebarCounts;
+
+  // Persist the picked creator in the URL (?creator=<username>) so a refresh or
+  // shared link restores the same creator instead of snapping back to All
+  // Creators. Mirrors the ?category= persistence in HomeClient and preserves any
+  // other params (e.g. category).
+  const writeCreatorParam = (username: string | null) => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (username) params.set("creator", username);
+    else params.delete("creator");
+    const qs = params.toString();
+    window.history.replaceState(
+      {},
+      "",
+      qs ? `?${qs}` : window.location.pathname,
+    );
+  };
+
+  // Pick a creator (or clear back to All Creators) — updates the sidebar UI,
+  // tells the parent to filter the gallery, and persists the choice to the URL.
   const pickCreator = (c: Creator | null) => {
     setSelectedCreator(c);
     onCreatorSelect?.(c?.id ?? null);
     setCreatorsOpen(false);
+    writeCreatorParam(c?.username ?? null);
   };
+
+  // Restore a creator selected before a refresh (or opened via a shared link)
+  // from ?creator=<username>. Fetches the public profile via get_creator and
+  // re-picks it. Runs once on mount; a stale/removed username drops the param.
+  const creatorRestored = useRef(false);
+  useEffect(() => {
+    if (creatorRestored.current) return;
+    creatorRestored.current = true;
+    const uname = new URLSearchParams(window.location.search).get("creator");
+    if (!uname) return;
+    let alive = true;
+    createClient()
+      .rpc("get_creator", { uname })
+      .then(({ data }) => {
+        if (!alive) return;
+        if (!data) {
+          writeCreatorParam(null); // unknown/removed creator → clear stale param
+          onCreatorRestoreDone?.(); // release the gallery's restore hold
+          return;
+        }
+        const d = data as Record<string, string | null>;
+        // Seed socials from this same fetch + mark loaded, so the socials effect
+        // doesn't fire a second get_creator for the same username.
+        setCreatorSocials(socialsFrom(d));
+        socialsLoadedFor.current = (d.username as string) ?? null;
+        pickCreator({
+          id: d.id as string,
+          username: d.username as string,
+          full_name: d.full_name ?? null,
+          avatar_url: d.avatar_url ?? null,
+          bio: d.bio ?? null,
+          count: 0,
+        });
+        onCreatorRestoreDone?.(); // creator resolved → gallery can fetch it now
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // "Become a Creator" — opens the Creator Program modal (handled by parent).
   const becomeCreator = () => {
@@ -390,6 +526,8 @@ export default function Sidebar({
   // footer CTA is correct the instant the popup opens (no query flash).
   const hasPendingApplication =
     useAuthStore((s) => s.pendingCreatorApp) === true;
+  // Existing OR revoked creator (approved application) — no "Become a Creator" CTA.
+  const wasCreator = useAuthStore((s) => s.wasCreator) === true;
 
   // `cols` derives from localStorage on the client, so the SSR value differs.
   // Render the column-split segments only after mount to avoid a hydration
@@ -596,7 +734,7 @@ export default function Sidebar({
                           </span>
                         </button>
                       </div>
-                    ) : hasPendingApplication ? null : (
+                    ) : hasPendingApplication || wasCreator ? null : (
                       <div className="flex items-center border-t border-[#e7e9ee] p-2">
                         <button
                           type="button"
@@ -615,9 +753,75 @@ export default function Sidebar({
               )}
             </div>
             {selectedCreator ? (
-              <p className="text-base tracking-[-0.03em] text-[#71717b]">
-                {selectedCreator.bio ? selectedCreator.bio : "No bio added"}
-              </p>
+              <div className="flex flex-col gap-2.5">
+                <p className="text-base tracking-[-0.03em] text-[#71717b]">
+                  {selectedCreator.bio ? selectedCreator.bio : "No bio added"}
+                </p>
+                {creatorSocials &&
+                  (creatorSocials.website_url ||
+                    creatorSocials.x_handle ||
+                    creatorSocials.instagram_handle ||
+                    creatorSocials.linkedin_handle ||
+                    creatorSocials.cta_url) && (
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      {creatorSocials.website_url && (
+                        <a
+                          href={creatorSocials.website_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="Website"
+                          className="flex size-8 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
+                        >
+                          <Globe size={16} strokeWidth={1.5} />
+                        </a>
+                      )}
+                      {creatorSocials.x_handle && (
+                        <a
+                          href={`https://x.com/${creatorSocials.x_handle}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="X"
+                          className="flex size-8 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
+                        >
+                          <XIcon size={14} />
+                        </a>
+                      )}
+                      {creatorSocials.instagram_handle && (
+                        <a
+                          href={`https://instagram.com/${creatorSocials.instagram_handle}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="Instagram"
+                          className="flex size-8 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
+                        >
+                          <InstagramIcon size={15} />
+                        </a>
+                      )}
+                      {creatorSocials.linkedin_handle && (
+                        <a
+                          href={`https://linkedin.com/in/${creatorSocials.linkedin_handle}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="LinkedIn"
+                          className="flex size-8 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
+                        >
+                          <LinkedinIcon size={15} />
+                        </a>
+                      )}
+                      {creatorSocials.cta_url && (
+                        <a
+                          href={creatorSocials.cta_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 rounded-full bg-[#09090b] px-3.5 py-1.5 text-[13px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#27272a]"
+                        >
+                          Hire Creator
+                          <ExternalLink size={13} strokeWidth={1.5} />
+                        </a>
+                      )}
+                    </div>
+                  )}
+              </div>
             ) : (
               <div className="flex flex-col gap-0.5">
                 <p className="text-base tracking-[-0.03em] text-[#71717b]">
@@ -653,7 +857,7 @@ export default function Sidebar({
               onToggle={() => toggleOpen(s.id)}
               selected={selected}
               onSelect={selectChip}
-              sidebarCounts={sidebarCounts}
+              sidebarCounts={counts}
             />
           ))}
 

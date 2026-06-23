@@ -16,7 +16,7 @@ type CompRow = {
   aspect_ratio: number | null;
   created_at: string;
   uploaded_by: string | null;
-  figma_data: string | null;
+  reuploaded: boolean | null;
 };
 
 export default async function AdminApprovalsPage() {
@@ -26,8 +26,11 @@ export default async function AdminApprovalsPage() {
   // have no select policy for other creators' unpublished rows).
   const { data: compData } = await admin
     .from("components")
+    // figma_data (the table's largest column — full Figma clipboard HTML) is
+    // NOT pulled here; it's fetched on demand via get_component_figma_data when
+    // the reviewer clicks Copy to Figma. Keeps this list query light.
     .select(
-      "id, category, section, filters, colors, preview_url, aspect_ratio, created_at, uploaded_by, figma_data",
+      "id, category, section, filters, colors, preview_url, aspect_ratio, created_at, uploaded_by, reuploaded",
     )
     .eq("status", "pending")
     .order("created_at", { ascending: false });
@@ -80,7 +83,7 @@ export default async function AdminApprovalsPage() {
       creatorName: prof?.name ?? "Unknown",
       creatorAvatar: prof?.avatar ?? null,
       creatorUsername: prof?.username ?? null,
-      figmaData: c.figma_data,
+      reuploaded: !!c.reuploaded,
     };
   });
 

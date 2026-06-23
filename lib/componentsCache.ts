@@ -1,8 +1,10 @@
 import type { GalleryComponent } from "@/store/authStore";
 
-// Bumped to v2 to drop any legacy / oversized / mis-keyed caches from before
-// the per-category + slim rewrite.
-const KEY = "components_cache_v2";
+// Bumped to v4 — the main gallery query no longer selects `colors` (the grid
+// never rendered swatches; color search uses its own pool), so the cached row
+// shape changed. v3 added uploaded_by / created_at / copy_count for the
+// lightbox; dropping a stale cache just forces one clean refetch.
+const KEY = "components_cache_v4";
 const TTL = 5 * 60 * 1000; // 5 minutes
 
 // Cache is keyed by category slug ("website", "logos", …) because pagination is

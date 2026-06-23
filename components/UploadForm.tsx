@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { TriangleAlert } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 import { hexToHsl } from "@/lib/utils";
@@ -252,6 +254,7 @@ export default function UploadForm({
   submitLabel = "Upload Component",
   onSuccess,
   ownerMode = false,
+  wasApproved = false,
 }: {
   initialValues?: UploadInitialValues;
   componentId?: string;
@@ -262,6 +265,9 @@ export default function UploadForm({
   // Creator publishing: insert as a pending, unpublished submission owned by the
   // current user (vs. the admin path which publishes an approved component).
   ownerMode?: boolean;
+  // Creator editing a previously-APPROVED design — mark it reuploaded so the
+  // approvals queue shows the "Reuploaded" tag.
+  wasApproved?: boolean;
 }) {
   const supabase = createClient();
   const profile = useAuthStore((s) => s.profile);
@@ -297,6 +303,13 @@ export default function UploadForm({
     initialValues?.figmaData ?? null,
   );
   const [pasteWaiting, setPasteWaiting] = useState(false);
+  // Toast shown when the pasted clipboard isn't a Figma component.
+  const [pasteError, setPasteError] = useState(false);
+  useEffect(() => {
+    if (!pasteError) return;
+    const t = setTimeout(() => setPasteError(false), 3500);
+    return () => clearTimeout(t);
+  }, [pasteError]);
   const [figmaCopied, setFigmaCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -325,12 +338,17 @@ export default function UploadForm({
     const onPaste = (e: ClipboardEvent) => {
       e.preventDefault();
       const html = e.clipboardData?.getData("text/html") ?? "";
-      if (html.includes("<!--StartFragment-->")) {
+      // Figma embeds its payload in `<!--(figma)…-->` / `<!--(figmeta)…-->`
+      // comments — present on Windows AND macOS. The old check looked for
+      // `<!--StartFragment-->`, which is a Windows-only CF_HTML wrapper and is
+      // absent on macOS, so paste always failed there. `StartFragment` is kept
+      // only as a legacy fallback.
+      const isFigma =
+        /<!--\(figm/i.test(html) || html.includes("<!--StartFragment-->");
+      if (isFigma) {
         setFigmaData(html);
       } else {
-        alert(
-          "No Figma component found. Copy a frame in Figma (Ctrl+C), click the button, then press Ctrl+V.",
-        );
+        setPasteError(true);
       }
       cleanup();
     };
@@ -462,7 +480,22 @@ export default function UploadForm({
       };
 
       const query = componentId
-        ? supabase.from("components").update(payload).eq("id", componentId)
+        ? supabase
+            .from("components")
+            .update(
+              // A creator editing their design sends it back to review: pending
+              // + unpublished. reuploaded=true only when it was already approved
+              // (drives the "Reuploaded" approvals tag). Admin edits keep status.
+              ownerMode
+                ? {
+                    ...payload,
+                    status: "pending",
+                    is_published: false,
+                    reuploaded: wasApproved,
+                  }
+                : payload,
+            )
+            .eq("id", componentId)
         : supabase.from("components").insert({
             ...payload,
             uploaded_by: profile?.id ?? null,
@@ -587,7 +620,7 @@ export default function UploadForm({
         <div className="flex min-h-[46px] w-full items-center gap-1 rounded-lg border border-[#e4e4e7] bg-white px-[7px] py-1.5">
           {pasteWaiting ? (
             <span className="flex-1 border border-transparent px-1 py-1.5 text-center text-sm font-medium tracking-[-0.03em] text-[#2974ff]">
-              Press Ctrl+V to paste your Figma component
+              Press ⌘V / Ctrl+V to paste your Figma component
             </span>
           ) : figmaData ? (
             <>
@@ -630,10 +663,23 @@ export default function UploadForm({
           </p>
         ) : (
           <p className="text-[11px] tracking-[-0.03em] text-[#a1a1aa]">
-            Copy a frame in Figma (Ctrl+C), then click to paste.
+            Copy a frame in Figma (⌘C / Ctrl+C), then click to paste.
           </p>
         )}
       </div>
+
+      {/* No-Figma-found toast (auto-dismisses). */}
+      {pasteError &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div className="pointer-events-none fixed bottom-6 left-1/2 z-[1000] -translate-x-1/2">
+            <div className="pointer-events-auto flex items-center gap-2.5 rounded-xl bg-[#18181b] px-4 py-3 text-[14px] tracking-[-0.03em] text-white shadow-[0px_8px_24px_rgba(0,0,0,0.25)]">
+              <TriangleAlert size={16} strokeWidth={2} className="shrink-0 text-[#f5b73d]" />
+              No Figma component found, copy a frame, then ⌘V / Ctrl+V.
+            </div>
+          </div>,
+          document.body,
+        )}
 
       {/* Categories */}
       <div className="mt-5 flex flex-col gap-2">

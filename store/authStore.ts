@@ -32,6 +32,13 @@ export type Profile = {
   // "Choose your username" modal. While false (and role === 'creator') the modal
   // is forced on next visit.
   creator_onboarded?: boolean;
+  // Creator socials (usernames only) + links (full https URLs). Edited in the
+  // account modal via set_my_socials; shown on the creator portal.
+  x_handle?: string | null;
+  instagram_handle?: string | null;
+  linkedin_handle?: string | null;
+  website_url?: string | null;
+  cta_url?: string | null;
 };
 
 // Minimal component shape the gallery renders.
@@ -52,6 +59,14 @@ export type GalleryComponent = {
   // When the component was last pinned to top (via the admin arrow). Most
   // recently pinned sorts first among featured. Null for never-pinned rows.
   featured_at?: string | null;
+  // Creator (uploader) id + the cheap per-component lightbox bits. Carried on the
+  // row so the lightbox paints its per-component panel with ZERO fetch and only
+  // fetches the per-CREATOR card once per creator (cached by uploaded_by). Null
+  // on admin uploads (no creator) / rows cached before these were added.
+  uploaded_by?: string | null;
+  created_at?: string | null;
+  // Snapshot at gallery load — a vanity count, slight staleness is fine.
+  copy_count?: number | null;
 };
 
 type AuthState = {
@@ -70,9 +85,18 @@ type AuthState = {
   // (no per-open query flash). null = not checked yet.
   pendingCreatorApp: boolean | null;
   setPendingCreatorApp: (v: boolean | null) => void;
+  // Whether the user has an APPROVED creator application — true even after their
+  // access is revoked (role back to 'user'). Hides the "Become a Creator" CTA so
+  // a revoked creator isn't prompted to re-apply. null = not checked yet.
+  wasCreator: boolean | null;
+  setWasCreator: (v: boolean | null) => void;
   // Shared gallery list — kept in sync so uploads appear instantly.
   components: GalleryComponent[];
   componentsLoaded: boolean;
+  // Bumped on add/remove so subscribers (e.g. the sidebar's creator-scoped
+  // count badges) can recompute when a component is added or deleted. Pagination
+  // appends do NOT bump it.
+  componentsVersion: number;
   // Active category slug — used to key the per-category cache on writes.
   currentCategory: string;
   setCurrentCategory: (category: string) => void;
@@ -116,8 +140,11 @@ export const useAuthStore = create<AuthState>()(
       setShowOnboarding: (show) => set({ showOnboarding: show }),
       pendingCreatorApp: null,
       setPendingCreatorApp: (v) => set({ pendingCreatorApp: v }),
+      wasCreator: null,
+      setWasCreator: (v) => set({ wasCreator: v }),
       components: [],
       componentsLoaded: false,
+      componentsVersion: 0,
       currentCategory: "website",
       setCurrentCategory: (currentCategory) => set({ currentCategory }),
       // No cache write here — the page-0 fetch writes the cache with its OWN
@@ -138,7 +165,11 @@ export const useAuthStore = create<AuthState>()(
           // persist so the upload survives a refresh
           const total = counts[CAT_SLUG_TO_DB[s.currentCategory]];
           writeComponentsCache(s.currentCategory, next, total);
-          return { components: next, categoryCounts: counts };
+          return {
+            components: next,
+            categoryCounts: counts,
+            componentsVersion: s.componentsVersion + 1,
+          };
         }),
       removeComponent: (id) =>
         set((s) => {
@@ -153,7 +184,11 @@ export const useAuthStore = create<AuthState>()(
             : s.categoryCounts;
           const total = counts[CAT_SLUG_TO_DB[s.currentCategory]];
           writeComponentsCache(s.currentCategory, next, total);
-          return { components: next, categoryCounts: counts };
+          return {
+            components: next,
+            categoryCounts: counts,
+            componentsVersion: s.componentsVersion + 1,
+          };
         }),
       clearComponents: () => set({ components: [], componentsLoaded: false }),
       hasMore: true,

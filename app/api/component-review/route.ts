@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -42,8 +43,9 @@ export async function POST(request: Request) {
           is_published: true,
           featured: false,
           featured_at: null,
-          // Clear any prior rejection note now that it's approved.
+          // Clear any prior rejection note + re-upload flag now that it's live.
           rejection_reason: null,
+          reuploaded: false,
         }
       : {
           status: "rejected",
@@ -60,6 +62,10 @@ export async function POST(request: Request) {
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  // Approving publishes the design (it enters the gallery) → the cached sidebar
+  // counts must refresh. Revalidate on reject too — harmless, keeps it simple.
+  revalidateTag("sidebar_counts", "max");
 
   return NextResponse.json({ ok: true });
 }

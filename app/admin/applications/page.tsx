@@ -25,44 +25,71 @@ export default async function AdminApplicationsPage() {
   const apps = (appsData as AppRow[]) ?? [];
   const uids = [...new Set(apps.map((a) => a.user_id))];
 
-  // Applicant name/username + email, only for the users shown. Name falls back
-  // from profiles.full_name → auth metadata name → email prefix.
-  const profileMap = new Map<string, { name: string | null; username: string | null }>();
-  const emailMap: Record<string, string> = {};
-  const authNameMap: Record<string, string> = {};
+  // Applicant name/username + email, only for the users shown — all from one
+  // profiles read (email is mirrored there by the signup trigger). Avoids the
+  // per-user admin.auth.admin.getUserById fan-out, which was the page's main
+  // latency. Name falls back: profiles.full_name → email prefix.
+  const profileMap = new Map<
+    string,
+    { name: string | null; username: string | null; email: string }
+  >();
   if (uids.length) {
-    await Promise.all([
-      admin
+    // Try with email; retry on the core columns if the DB lacks the email column
+    // so name/username still load (email falls back to the auth lookup below).
+    let profRes = await admin
+      .from("profiles")
+      .select("id, full_name, username, email")
+      .in("id", uids);
+    if (profRes.error) {
+      profRes = (await admin
         .from("profiles")
         .select("id, full_name, username")
-        .in("id", uids)
-        .then(({ data }) => {
-          for (const p of data ?? []) {
-            profileMap.set(p.id as string, {
-              name: (p.full_name as string) ?? null,
-              username: (p.username as string) ?? null,
-            });
-          }
+        .in("id", uids)) as typeof profRes;
+    }
+    for (const p of (profRes.data as {
+      id: string;
+      full_name: string | null;
+      username: string | null;
+      email?: string | null;
+    }[]) ?? []) {
+      profileMap.set(p.id, {
+        name: p.full_name ?? null,
+        username: p.username ?? null,
+        email: (p.email as string) || "",
+      });
+    }
+
+    // Fallback ONLY for applicants whose profile is missing email or name —
+    // normally empty, so the per-user auth lookup is skipped.
+    const incomplete = uids.filter((id) => {
+      const p = profileMap.get(id);
+      return !p?.email || !p?.name;
+    });
+    if (incomplete.length) {
+      await Promise.all(
+        incomplete.map(async (id) => {
+          const { data: u } = await admin.auth.admin.getUserById(id);
+          const user = u?.user;
+          if (!user) return;
+          const existing = profileMap.get(id);
+          const meta = user.user_metadata ?? {};
+          const metaName =
+            (meta.full_name as string) || (meta.name as string) || null;
+          profileMap.set(id, {
+            name: existing?.name ?? metaName,
+            username: existing?.username ?? null,
+            email: existing?.email || user.email || "",
+          });
         }),
-      ...uids.map(async (id) => {
-        const { data } = await admin.auth.admin.getUserById(id);
-        const u = data?.user;
-        if (!u) return;
-        emailMap[id] = u.email || "";
-        const meta = u.user_metadata ?? {};
-        authNameMap[id] =
-          (meta.full_name as string) || (meta.name as string) || "";
-      }),
-    ]);
+      );
+    }
   }
 
   const items: AppItem[] = apps.map((a) => {
-    const email = emailMap[a.user_id] || "";
+    const p = profileMap.get(a.user_id);
+    const email = p?.email || "";
     const name =
-      profileMap.get(a.user_id)?.name ||
-      authNameMap[a.user_id] ||
-      (email ? email.split("@")[0] : "") ||
-      "—";
+      p?.name || (email ? email.split("@")[0] : "") || "—";
     return {
       id: a.id,
       role: a.role,
@@ -71,7 +98,7 @@ export default async function AdminApplicationsPage() {
       status: a.status,
       created_at: a.created_at,
       name,
-      username: profileMap.get(a.user_id)?.username ?? null,
+      username: p?.username ?? null,
       email,
     };
   });

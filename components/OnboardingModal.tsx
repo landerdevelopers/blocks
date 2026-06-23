@@ -103,17 +103,33 @@ export default function OnboardingModal() {
       return;
     }
 
-    const row = {
-      id: uid,
+    // The new-user trigger creates the profile row at signup, so onboarding only
+    // sets the user's name/avatar. Use UPDATE (not upsert): a PostgREST upsert's
+    // ON CONFLICT DO UPDATE puts the primary key in its SET clause, but the
+    // column-scoped grant withholds UPDATE on `id` — which surfaces as
+    // "permission denied for table profiles". UPDATE touches only full_name /
+    // avatar_url, exactly what the grant allows.
+    const patch = {
       full_name: fullName.trim(),
       avatar_url: avatarUrl,
     };
 
-    const { data, error: upErr } = await supabase
+    let { data, error: upErr } = await supabase
       .from("profiles")
-      .upsert(row)
+      .update(patch)
+      .eq("id", uid)
       .select("*")
-      .single();
+      .maybeSingle();
+
+    // Row not created yet (trigger lag) → INSERT it (grant covers id + the two
+    // columns on insert).
+    if (!upErr && !data) {
+      ({ data, error: upErr } = await supabase
+        .from("profiles")
+        .insert({ id: uid, ...patch })
+        .select("*")
+        .single());
+    }
 
     setSaving(false);
     if (upErr) {

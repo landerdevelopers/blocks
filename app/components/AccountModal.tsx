@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Globe } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { ScrollFadeEffect } from "@/components/scroll-fade-effect";
+import { XIcon, InstagramIcon, LinkedinIcon } from "@/components/social-icons";
 import { useAuthStore, type Profile } from "@/store/authStore";
 import { timeUntilMidnightIST } from "@/lib/ist";
 
@@ -64,13 +66,49 @@ export default function AccountModal({
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Socials + custom CTA. Handles are usernames (stored bare); website/cta are
+  // edited WITHOUT the https:// prefix (prepended on save).
+  const [xh, setXh] = useState("");
+  const [ig, setIg] = useState("");
+  const [li, setLi] = useState("");
+  const [web, setWeb] = useState("");
+  const [cta, setCta] = useState("");
+  const stripScheme = (v: string | null | undefined) =>
+    (v ?? "").replace(/^https?:\/\//i, "");
   useEffect(() => {
     if (!open || !profile) return;
     setName(profile.full_name ?? "");
     setUsername(profile.username ?? "");
+    setXh(profile.x_handle ?? "");
+    setIg(profile.instagram_handle ?? "");
+    setLi(profile.linkedin_handle ?? "");
+    setWeb(stripScheme(profile.website_url));
+    setCta(stripScheme(profile.cta_url));
     setRemote(null);
     setSaveError(null);
   }, [open, profile]);
+
+  // A pasted link in a username field — usernames never contain / : or spaces.
+  const looksLikeLink = (v: string) => /[/\s:]/.test(v) || /https?/i.test(v);
+  const socialFieldError = looksLikeLink(xh)
+    ? "X (Twitter) must be a username, not a link"
+    : looksLikeLink(ig)
+      ? "Instagram must be a username, not a link"
+      : looksLikeLink(li)
+        ? "LinkedIn must be a username, not a link"
+        : null;
+  // Normalize a url field to a full https:// link (or empty).
+  const normUrl = (v: string) => {
+    const s = v.trim().replace(/^https?:\/\//i, "");
+    return s ? `https://${s}` : "";
+  };
+  const socialsChanged =
+    xh !== (profile?.x_handle ?? "") ||
+    ig !== (profile?.instagram_handle ?? "") ||
+    li !== (profile?.linkedin_handle ?? "") ||
+    normUrl(web) !== (profile?.website_url ?? "") ||
+    normUrl(cta) !== (profile?.cta_url ?? "");
 
   const onChangeUsername = (raw: string) => {
     setUsername(
@@ -122,9 +160,10 @@ export default function AccountModal({
   const nameOk = name.trim().length >= 2;
   // Save stays disabled until there's a valid, available change to persist.
   const canSave =
-    (usernameChanged || nameChanged) &&
+    (usernameChanged || nameChanged || socialsChanged) &&
     nameOk &&
     avail === "available" &&
+    !socialFieldError &&
     !saving;
 
   const onSave = async () => {
@@ -150,6 +189,20 @@ export default function AccountModal({
         .update({ full_name: name.trim() })
         .eq("id", profile.id);
     }
+    if (socialsChanged) {
+      const { error } = await supabase.rpc("set_my_socials", {
+        p_x: xh,
+        p_instagram: ig,
+        p_linkedin: li,
+        p_website: normUrl(web),
+        p_cta: normUrl(cta),
+      });
+      if (error) {
+        setSaving(false);
+        setSaveError(error.message || "Couldn't save socials.");
+        return;
+      }
+    }
     // Pull the fresh row so the store reflects both changes.
     const { data: fresh } = await supabase
       .from("profiles")
@@ -164,6 +217,9 @@ export default function AccountModal({
   // Pending-application flag is prefetched at sign-in (AuthProvider), so the
   // "Become Creator" section renders the instant the modal opens.
   const hasPendingApplication = useAuthStore((s) => s.pendingCreatorApp);
+  // True for an existing OR revoked creator (approved application) — they should
+  // not see the "Become a Creator" CTA.
+  const wasCreator = useAuthStore((s) => s.wasCreator);
 
   // Live countdown to midnight IST — recalculated immediately and every 60s.
   const [reset, setReset] = useState(timeUntilMidnightIST());
@@ -334,8 +390,9 @@ export default function AccountModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex h-fit w-[440px] flex-col gap-5 rounded-2xl bg-white p-[28px] shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
+        className="flex max-h-[85vh] w-[440px] flex-col overflow-hidden rounded-2xl bg-white shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
       >
+      <ScrollFadeEffect className="flex flex-col gap-5 p-[28px]">
         {/* Identity — avatar is changeable */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -402,6 +459,110 @@ export default function AccountModal({
               )}
             </div>
 
+            {/* Socials — usernames only (X / Instagram / LinkedIn); website is a
+                full link. Stored bare; the portal builds the public URLs. */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[14px] font-medium tracking-[-0.03em] text-black">
+                Socials
+              </label>
+              <div className="flex flex-col overflow-hidden rounded-[10px] border border-[#e7e9ee]">
+                <div className="group flex items-center gap-2 border-b border-[#e7e9ee] bg-[#f9f9fa] px-2.5 py-2">
+                  <Globe
+                    size={18}
+                    className={`shrink-0 group-focus-within:text-black ${web ? "text-black" : "text-[#a3a3a3]"}`}
+                  />
+                  <input
+                    value={web}
+                    onChange={(e) => {
+                      setWeb(e.target.value);
+                      setSaveError(null);
+                    }}
+                    placeholder="yourwebsite.com"
+                    autoComplete="off"
+                    className="w-full bg-transparent text-[14px] tracking-[-0.03em] text-black outline-none placeholder:text-[#a3a3a3]"
+                  />
+                </div>
+                <div className="group flex items-center gap-2 border-b border-[#e7e9ee] bg-[#f9f9fa] px-2.5 py-2">
+                  <XIcon
+                    size={17}
+                    className={`shrink-0 group-focus-within:text-black ${xh ? "text-black" : "text-[#a3a3a3]"}`}
+                  />
+                  <input
+                    value={xh}
+                    onChange={(e) => {
+                      setXh(e.target.value.replace(/^@+/, ""));
+                      setSaveError(null);
+                    }}
+                    placeholder="username"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="w-full bg-transparent text-[14px] tracking-[-0.03em] text-black outline-none placeholder:text-[#a3a3a3]"
+                  />
+                </div>
+                <div className="group flex items-center gap-2 border-b border-[#e7e9ee] bg-[#f9f9fa] px-2.5 py-2">
+                  <InstagramIcon
+                    size={17}
+                    className={`shrink-0 group-focus-within:text-black ${ig ? "text-black" : "text-[#a3a3a3]"}`}
+                  />
+                  <input
+                    value={ig}
+                    onChange={(e) => {
+                      setIg(e.target.value.replace(/^@+/, ""));
+                      setSaveError(null);
+                    }}
+                    placeholder="username"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="w-full bg-transparent text-[14px] tracking-[-0.03em] text-black outline-none placeholder:text-[#a3a3a3]"
+                  />
+                </div>
+                <div className="group flex items-center gap-2 bg-[#f9f9fa] px-2.5 py-2">
+                  <LinkedinIcon
+                    size={17}
+                    className={`shrink-0 group-focus-within:text-black ${li ? "text-black" : "text-[#a3a3a3]"}`}
+                  />
+                  <input
+                    value={li}
+                    onChange={(e) => {
+                      setLi(e.target.value.replace(/^@+/, ""));
+                      setSaveError(null);
+                    }}
+                    placeholder="username"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="w-full bg-transparent text-[14px] tracking-[-0.03em] text-black outline-none placeholder:text-[#a3a3a3]"
+                  />
+                </div>
+              </div>
+              {socialFieldError && (
+                <p className="text-[12px] tracking-[-0.03em] text-[#ff2f2f]">
+                  {socialFieldError}
+                </p>
+              )}
+            </div>
+
+            {/* Custom CTA Link — https:// is fixed, user types the rest. */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[14px] font-medium tracking-[-0.03em] text-black">
+                Custom CTA Link
+              </label>
+              <div className="flex h-[36px] items-stretch overflow-hidden rounded-[8px] border border-[#e5e5e5] focus-within:border-[#2974ff]">
+                <span className="flex items-center bg-white px-3 text-[14px] tracking-[-0.03em] text-[#a3a3a3]">
+                  https://
+                </span>
+                <input
+                  value={cta}
+                  onChange={(e) => {
+                    setCta(e.target.value);
+                    setSaveError(null);
+                  }}
+                  placeholder="yoursite.com/link"
+                  autoComplete="off"
+                  className="w-full border-l border-[#ebebeb] bg-white px-3 text-[14px] tracking-[-0.03em] text-black outline-none placeholder:text-[#a3a3a3]"
+                />
+              </div>
+            </div>
+
             {dailyLimit}
             {notice}
             {!unlimited && resetTimer}
@@ -421,7 +582,7 @@ export default function AccountModal({
               {saving ? "Saving…" : "Save"}
             </button>
 
-            <div className="h-px w-full bg-[#e7e9ee]" />
+            <div className="h-px w-full shrink-0 bg-[#e7e9ee]" />
 
             {/* Open Creator Portal */}
             <button
@@ -446,7 +607,7 @@ export default function AccountModal({
 
             {/* Become Creator — hidden while an application is in review, and
                 while the pending-check is still loading (avoids a flash). */}
-            {hasPendingApplication === false && (
+            {hasPendingApplication === false && !wasCreator && (
               <div className="flex flex-col gap-[6px]">
                 <button
                   type="button"
@@ -464,6 +625,7 @@ export default function AccountModal({
             )}
           </>
         )}
+      </ScrollFadeEffect>
       </div>
     </div>,
     document.body,

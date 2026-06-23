@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createAdminClient } from "@/lib/supabase/admin";
+import CreatorAccessButton from "./CreatorAccessButton";
 
 // Admin-only (gated by middleware). Lists every approved creator (a user with
 // an approved Creator Program application) and their design counts by status.
@@ -11,13 +12,7 @@ type ProfileRow = {
   avatar_url: string | null;
   username: string | null;
   bio: string | null;
-};
-
-type CompRow = {
-  uploaded_by: string | null;
-  status: "pending" | "approved" | "rejected" | null;
-  is_published: boolean | null;
-  is_private: boolean | null;
+  role: string | null;
 };
 
 const card =
@@ -39,70 +34,94 @@ export default async function AdminCreatorsPage() {
     if (!uids.includes(a.user_id)) uids.push(a.user_id);
   }
 
-  const profileMap = new Map<string, ProfileRow>();
-  const emailMap: Record<string, string> = {};
-  const authNameMap: Record<string, string> = {};
+  const profileMap = new Map<string, ProfileRow & { email: string | null }>();
   const counts = new Map<
     string,
     { total: number; live: number; pending: number; rejected: number }
   >();
 
   if (uids.length) {
-    const [, , { data: comps }] = await Promise.all([
-      // Profiles for the approved creators.
-      admin
+    // Kick off the counts RPC in parallel with the profiles read.
+    const countsPromise = admin.rpc("get_creator_counts", { creator_ids: uids });
+
+    // Profiles (incl. email, mirrored by the signup trigger) — replaces the
+    // per-user admin.auth.admin.getUserById fan-out that dominated load time.
+    // If the DB predates the `email` column, the select errors — retry with the
+    // core columns so username/name/avatar still load (and email falls back to
+    // the auth lookup below).
+    let profRes = await admin
+      .from("profiles")
+      .select("id, full_name, avatar_url, username, bio, role, email")
+      .in("id", uids);
+    if (profRes.error) {
+      profRes = (await admin
         .from("profiles")
-        .select("id, full_name, avatar_url, username, bio")
-        .in("id", uids)
-        .then((res) => {
-          for (const p of (res.data as ProfileRow[]) ?? []) {
-            profileMap.set(p.id, p);
-          }
-          return res;
-        }),
-      // Emails + auth metadata name fallback.
-      Promise.all(
-        uids.map(async (id) => {
+        .select("id, full_name, avatar_url, username, bio, role")
+        .in("id", uids)) as typeof profRes;
+    }
+    for (const p of (profRes.data as (ProfileRow & {
+      email?: string | null;
+    })[]) ?? []) {
+      profileMap.set(p.id, { ...p, email: p.email ?? null });
+    }
+
+    const countsRes = await countsPromise;
+
+    for (const c of (countsRes.data as
+      | {
+          uploaded_by: string;
+          total: number;
+          live: number;
+          pending: number;
+          rejected: number;
+        }[]
+      | null) ?? []) {
+      counts.set(c.uploaded_by, {
+        total: Number(c.total),
+        live: Number(c.live),
+        pending: Number(c.pending),
+        rejected: Number(c.rejected),
+      });
+    }
+
+    // Fallback ONLY for creators whose profile is missing email or name (e.g.
+    // signed up before the email column/trigger). Normally this set is empty, so
+    // the per-user auth lookup fan-out is skipped entirely.
+    const incomplete = uids.filter((id) => {
+      const p = profileMap.get(id);
+      return !p?.email || !p?.full_name;
+    });
+    if (incomplete.length) {
+      await Promise.all(
+        incomplete.map(async (id) => {
           const { data } = await admin.auth.admin.getUserById(id);
           const u = data?.user;
           if (!u) return;
-          emailMap[id] = u.email || "";
+          const existing = profileMap.get(id);
           const meta = u.user_metadata ?? {};
-          authNameMap[id] =
-            (meta.full_name as string) || (meta.name as string) || "";
+          const metaName =
+            (meta.full_name as string) || (meta.name as string) || null;
+          const metaAvatar =
+            (meta.avatar_url as string) || (meta.picture as string) || null;
+          profileMap.set(id, {
+            id,
+            full_name: existing?.full_name ?? metaName,
+            avatar_url: existing?.avatar_url ?? metaAvatar,
+            username: existing?.username ?? null,
+            bio: existing?.bio ?? null,
+            role: existing?.role ?? null,
+            email: existing?.email || u.email || "",
+          });
         }),
-      ),
-      // Their components, for the status counts.
-      admin
-        .from("components")
-        .select("uploaded_by, status, is_published, is_private")
-        .in("uploaded_by", uids),
-    ]);
-
-    for (const c of (comps as CompRow[]) ?? []) {
-      if (!c.uploaded_by) continue;
-      const k = counts.get(c.uploaded_by) ?? {
-        total: 0,
-        live: 0,
-        pending: 0,
-        rejected: 0,
-      };
-      k.total++;
-      if (c.status === "approved" && c.is_published && !c.is_private) k.live++;
-      else if (c.status === "pending") k.pending++;
-      else if (c.status === "rejected") k.rejected++;
-      counts.set(c.uploaded_by, k);
+      );
     }
   }
 
   const rows = uids.map((id) => {
     const p = profileMap.get(id);
-    const email = emailMap[id] || "";
+    const email = p?.email || "";
     const name =
-      p?.full_name ||
-      authNameMap[id] ||
-      (email ? email.split("@")[0] : "") ||
-      "—";
+      p?.full_name || p?.username || (email ? email.split("@")[0] : "") || "—";
     return {
       id,
       name,
@@ -110,6 +129,7 @@ export default async function AdminCreatorsPage() {
       username: p?.username ?? null,
       avatar_url: p?.avatar_url ?? null,
       bio: p?.bio ?? null,
+      role: p?.role ?? null,
       counts: counts.get(id) ?? { total: 0, live: 0, pending: 0, rejected: 0 },
     };
   });
@@ -176,6 +196,14 @@ export default async function AdminCreatorsPage() {
                         {r.username ? ` · @${r.username}` : ""}
                       </span>
                     </div>
+
+                    {/* Grant / revoke creator access. Hidden for admins. */}
+                    {r.role !== "admin" && (
+                      <CreatorAccessButton
+                        userId={r.id}
+                        isCreator={r.role === "creator"}
+                      />
+                    )}
 
                     <div className="flex shrink-0 items-center gap-2 text-[12px] tracking-[-0.03em]">
                       <span className="rounded-full bg-[#deeaff] px-2 py-0.5 font-medium text-[#2974ff]">

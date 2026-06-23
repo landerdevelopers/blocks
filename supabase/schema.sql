@@ -121,6 +121,19 @@ create index if not exists login_events_date_idx     on public.login_events (dat
 create index if not exists copy_events_date_idx       on public.copy_events (date);
 create index if not exists copy_events_date_user_idx  on public.copy_events (date, user_id);
 create index if not exists login_events_date_user_idx on public.login_events (date, user_id);
+-- Gallery list: a partial covering index for the exact predicate the gallery
+-- query uses (published + public), ordered newest-first within a category.
+create index if not exists components_gallery_idx
+  on public.components (category, is_published, is_private, created_at desc)
+  where is_published = true and is_private = false;
+-- "Top copied" / per-component copy timelines on the analytics page.
+create index if not exists copy_events_component_date_idx
+  on public.copy_events (component_id, copied_at desc);
+-- Plain uploaded_by lookups (admin Creators counts, creator filters). The
+-- composite components_creator_order_idx also leads with uploaded_by, so this is
+-- a smaller fallback for equality scans.
+create index if not exists components_uploaded_by_idx
+  on public.components (uploaded_by);
 -- Dedup: at most one login row per user per day. Doubles as the ON CONFLICT
 -- target for the client-side upsert in AuthProvider.
 create unique index if not exists login_events_user_date_uniq
@@ -214,6 +227,15 @@ alter table public.profiles add column if not exists username text unique;
 alter table public.profiles add column if not exists bio text;
 alter table public.profiles
   add column if not exists creator_onboarded boolean not null default false;
+-- Creator socials + custom CTA (edited in the account modal, shown on the
+-- portal). Handles are USERNAMES only (no URL); website/cta are full https URLs.
+-- Written only via set_my_socials() (validated), so they're not in the
+-- column-scoped client update grant below.
+alter table public.profiles add column if not exists x_handle         text;
+alter table public.profiles add column if not exists instagram_handle text;
+alter table public.profiles add column if not exists linkedin_handle  text;
+alter table public.profiles add column if not exists website_url      text;
+alter table public.profiles add column if not exists cta_url          text;
 
 -- profiles: a logged-in user manages only their own row (RLS scopes it to
 -- auth.uid()). anon needs no access.
@@ -753,7 +775,9 @@ begin
   if is_admin then
     return fdata;
   end if;
-  if owner = uid and pub = false then
+  -- A creator may read their OWN design's figma_data for editing — including an
+  -- already-approved one (editing it sends it back to pending for re-review).
+  if owner = uid then
     return fdata;
   end if;
   return null;
@@ -780,6 +804,10 @@ drop function if exists public.search_by_color(text, int);
 alter table public.components add column if not exists status text not null default 'pending'
   check (status in ('pending', 'approved', 'rejected'));
 alter table public.components add column if not exists is_private boolean not null default false;
+-- reuploaded: set true when a creator edits an already-APPROVED design (it drops
+-- back to pending for re-review). Drives the "Reuploaded" tag on the approvals
+-- queue. Cleared on approval.
+alter table public.components add column if not exists reuploaded boolean not null default false;
 -- rejection_reason: the admin's note shown to the creator when a design is
 -- rejected (surfaced as a tooltip on the "Rejected" tag on their portal).
 -- Cleared on approval. Written only by the admin review route (service role).
@@ -827,14 +855,16 @@ create policy "Components: owner insert"
     and is_published = false
   );
 
--- A creator may edit their own design only while it's not yet published
--- (pending or rejected); the row must stay unpublished/non-approved after edit.
+-- A creator may edit ANY of their own designs — including an already-approved
+-- one. The WITH CHECK forces the edited row back to an unpublished, pending
+-- state, so an edit always re-enters the review queue (they can't self-publish
+-- or keep an approved design live after changing it).
 drop policy if exists "Components: owner update own" on public.components;
 create policy "Components: owner update own"
   on public.components
   for update
   to authenticated
-  using (uploaded_by = auth.uid() and is_published = false)
+  using (uploaded_by = auth.uid())
   with check (
     uploaded_by = auth.uid()
     and is_published = false
@@ -850,9 +880,9 @@ create policy "Components: owner delete own"
   using (uploaded_by = auth.uid());
 
 -- ---------------------------------------------------------------------------
--- Upload rate limit: a creator may insert at most 20 components per rolling
--- hour. Enforced in a BEFORE INSERT trigger (not the client) so it can't be
--- bypassed. Admins are exempt. The raised message surfaces to the UploadForm.
+-- Upload rate limit: a creator may insert at most 25 components per IST day.
+-- Enforced in a BEFORE INSERT trigger (not the client) so it can't be bypassed.
+-- Admins are exempt. The raised message surfaces to the UploadForm.
 -- ---------------------------------------------------------------------------
 create or replace function public.enforce_creator_upload_rate()
 returns trigger
@@ -862,19 +892,21 @@ set search_path = public
 as $$
 declare
   uploader_role text;
-  recent        int;
+  today_count   int;
 begin
   select role into uploader_role from profiles where id = new.uploaded_by;
   -- Admins have no upload cap.
   if uploader_role = 'admin' then
     return new;
   end if;
-  select count(*) into recent
+  -- Count this creator's uploads on the current IST calendar day.
+  select count(*) into today_count
   from components
   where uploaded_by = new.uploaded_by
-    and created_at > now() - interval '1 hour';
-  if recent >= 20 then
-    raise exception 'Only 20 components allowed per hour';
+    and (created_at at time zone 'Asia/Kolkata')::date
+        = (now() at time zone 'Asia/Kolkata')::date;
+  if today_count >= 25 then
+    raise exception 'Only 25 components allowed per day';
   end if;
   return new;
 end;
@@ -904,12 +936,79 @@ as $$
     'avatar_url', p.avatar_url,
     'username', p.username,
     'bio', p.bio,
-    'created_at', p.created_at
+    'created_at', p.created_at,
+    'x_handle', p.x_handle,
+    'instagram_handle', p.instagram_handle,
+    'linkedin_handle', p.linkedin_handle,
+    'website_url', p.website_url,
+    'cta_url', p.cta_url
   )
   from public.profiles p
   where lower(p.username) = lower(btrim(uname));
 $$;
 grant execute on function public.get_creator(text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- set_my_socials(...) — the caller updates their OWN socials + CTA. Handles are
+-- usernames only (no URL); website/cta must be https. SECURITY DEFINER so it can
+-- write columns the client update grant excludes; validates server-side and
+-- raises a clear message the account modal surfaces. Empty string → null.
+-- ---------------------------------------------------------------------------
+create or replace function public.set_my_socials(
+  p_x         text,
+  p_instagram text,
+  p_linkedin  text,
+  p_website   text,
+  p_cta       text
+)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  vx  text := nullif(btrim(ltrim(coalesce(p_x, ''), '@')), '');
+  vi  text := nullif(btrim(ltrim(coalesce(p_instagram, ''), '@')), '');
+  vl  text := nullif(btrim(ltrim(coalesce(p_linkedin, ''), '@')), '');
+  vw  text := nullif(btrim(coalesce(p_website, '')), '');
+  vc  text := nullif(btrim(coalesce(p_cta, '')), '');
+  handle_re text := '^[A-Za-z0-9._-]+$';
+begin
+  if uid is null then
+    raise exception 'unauthenticated';
+  end if;
+  -- Handles: a username, never a link.
+  if vx is not null and vx !~ handle_re then
+    raise exception 'X (Twitter) must be a username, not a link';
+  end if;
+  if vi is not null and vi !~ handle_re then
+    raise exception 'Instagram must be a username, not a link';
+  end if;
+  if vl is not null and vl !~ handle_re then
+    raise exception 'LinkedIn must be a username, not a link';
+  end if;
+  -- URLs: https only.
+  if vw is not null and vw !~* '^https://[^ ]+\.[^ ]+' then
+    raise exception 'Website must be a valid https:// link';
+  end if;
+  if vc is not null and vc !~* '^https://[^ ]+\.[^ ]+' then
+    raise exception 'Custom CTA link must be a valid https:// link';
+  end if;
+
+  update public.profiles set
+    x_handle         = vx,
+    instagram_handle = vi,
+    linkedin_handle  = vl,
+    website_url      = vw,
+    cta_url          = vc
+  where id = uid;
+
+  return json_build_object('success', true);
+end;
+$$;
+grant execute on function public.set_my_socials(text, text, text, text, text)
+  to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- RPC: ensure_my_username() — returns the caller's username, generating a
@@ -950,37 +1049,10 @@ end;
 $$;
 grant execute on function public.ensure_my_username() to authenticated;
 
--- ---------------------------------------------------------------------------
--- RPC: get_window_stats(start_date, end_date) — analytics KPIs for an IST day
--- window, aggregated entirely in the DB. Replaces pulling every copy/login row
--- to JS just to count uniques. Returns one row:
---   total_copies, unique_copiers, total_logins, unique_logins, new_accounts.
--- new_accounts uses the IST day boundaries [start 00:00, (end+1) 00:00).
--- SECURITY DEFINER + STABLE; analytics calls it via the service-role client.
--- ---------------------------------------------------------------------------
-create or replace function public.get_window_stats(start_date date, end_date date)
-returns table (
-  total_copies  bigint,
-  unique_copiers bigint,
-  total_logins  bigint,
-  unique_logins bigint,
-  new_accounts  bigint
-)
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select
-    (select count(*)              from copy_events  where date between start_date and end_date),
-    (select count(distinct user_id) from copy_events where date between start_date and end_date),
-    (select count(*)              from login_events where date between start_date and end_date),
-    (select count(distinct user_id) from login_events where date between start_date and end_date),
-    (select count(*) from profiles
-       where created_at >= ((start_date)::timestamp     at time zone 'Asia/Kolkata')
-         and created_at <  ((end_date + 1)::timestamp   at time zone 'Asia/Kolkata'));
-$$;
-grant execute on function public.get_window_stats(date, date) to authenticated, service_role;
+-- get_window_stats was the first-pass analytics aggregate. It's superseded by
+-- get_analytics_windows (single combined RPC, see the Analytics section below)
+-- and is no longer called anywhere — dropped.
+drop function if exists public.get_window_stats(date, date);
 
 -- ---------------------------------------------------------------------------
 -- RPC: list_creators() — every creator with a username and at least one live
@@ -1072,6 +1144,39 @@ create policy "Creator apps: admin update"
       where p.id = auth.uid() and p.role = 'admin'
     )
   );
+
+-- ---------------------------------------------------------------------------
+-- Auto-grant the creator role when an application is approved. The app's
+-- approve route already flips the role, but this trigger guarantees it for ANY
+-- approval path (direct SQL, future tooling). SECURITY DEFINER so it runs as the
+-- owner — current_user is then not 'authenticated'/'anon', so it isn't blocked
+-- by prevent_role_self_change. Never demotes an admin. Fires only on the
+-- transition INTO 'approved'.
+-- ---------------------------------------------------------------------------
+create or replace function public.grant_creator_on_approval()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.status = 'approved'
+     and (tg_op = 'INSERT' or old.status is distinct from 'approved')
+  then
+    update public.profiles
+    set role = 'creator'
+    where id = new.user_id
+      and role <> 'admin';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists creator_app_approved on public.creator_applications;
+create trigger creator_app_approved
+  after insert or update on public.creator_applications
+  for each row
+  execute function public.grant_creator_on_approval();
 
 -- ---------------------------------------------------------------------------
 -- Creator onboarding — once an application is approved (role => 'creator'), the
@@ -1389,3 +1494,373 @@ as $$
   order by count desc, p.full_name asc;
 $$;
 grant execute on function public.list_creators() to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- RPC: get_sidebar_counts() — pre-aggregated badge counts for the home sidebar.
+-- Counts ONLY gallery-visible components: published AND NOT private. Runs under
+-- the service-role client (which bypasses RLS), so the is_private filter is
+-- explicit here — otherwise private designs would still be counted even though
+-- they're hidden from the gallery. Returns:
+--   { categories: { "<Category>": n },
+--     sections:   { "<Category>|<Section>": n },
+--     logoLetters: [ "A", "B", … ]  -- Logos letters that have ≥1 component }
+-- ---------------------------------------------------------------------------
+create or replace function public.get_sidebar_counts()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with vis as (
+    select category, section, filters
+    from public.components
+    where is_published = true
+      and is_private = false
+  )
+  select jsonb_build_object(
+    'categories', coalesce((
+      select jsonb_object_agg(category, c)
+      from (
+        select category, count(*) as c
+        from vis where category is not null group by category
+      ) a
+    ), '{}'::jsonb),
+    'sections', coalesce((
+      select jsonb_object_agg(category || '|' || section, c)
+      from (
+        select category, section, count(*) as c
+        from vis where category is not null and section is not null
+        group by category, section
+      ) b
+    ), '{}'::jsonb),
+    'logoLetters', coalesce((
+      select jsonb_agg(distinct f)
+      from vis, unnest(coalesce(filters, '{}'::text[])) as f
+      where category = 'Logos'
+    ), '[]'::jsonb)
+  );
+$$;
+grant execute on function public.get_sidebar_counts() to anon, authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- RPC: get_creator_counts(creator_ids uuid[]) — per-creator design status
+-- counts for the admin Creators page, aggregated in-DB (no raw component rows
+-- pulled to JS). live = approved + published + public.
+-- ---------------------------------------------------------------------------
+create or replace function public.get_creator_counts(creator_ids uuid[])
+returns table (
+  uploaded_by uuid,
+  total       bigint,
+  live        bigint,
+  pending     bigint,
+  rejected    bigint
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    c.uploaded_by,
+    count(*) as total,
+    count(*) filter (
+      where c.status = 'approved' and c.is_published and not c.is_private
+    ) as live,
+    count(*) filter (where c.status = 'pending') as pending,
+    count(*) filter (where c.status = 'rejected') as rejected
+  from public.components c
+  where c.uploaded_by = any (creator_ids)
+  group by c.uploaded_by;
+$$;
+grant execute on function public.get_creator_counts(uuid[]) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- RPC: get_creator_sidebar_counts(creator_id) — category / section / logo-letter
+-- badge counts for ONE creator, aggregated in-DB. Mirrors get_sidebar_counts but
+-- scoped to a single uploader, over their LIVE designs only (approved + public +
+-- published). Replaces the client pulling every component row just to tally in
+-- JS. Public-safe (only live designs), so granted to anon/authenticated.
+-- ---------------------------------------------------------------------------
+create or replace function public.get_creator_sidebar_counts(creator_id uuid)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with live as (
+    select category, section, filters
+    from public.components
+    where uploaded_by = creator_id
+      and is_published = true and is_private = false and status = 'approved'
+  )
+  select jsonb_build_object(
+    'categories', (
+      select coalesce(jsonb_object_agg(category, n), '{}'::jsonb)
+      from (
+        select category, count(*) n from live
+        where category is not null group by category
+      ) t
+    ),
+    'sections', (
+      select coalesce(jsonb_object_agg(category || '|' || section, n), '{}'::jsonb)
+      from (
+        select category, section, count(*) n from live
+        where category is not null and section is not null
+        group by category, section
+      ) t
+    ),
+    'logoLetters', (
+      select coalesce(jsonb_agg(distinct f), '[]'::jsonb)
+      from live, unnest(coalesce(filters, '{}')) f
+      where category = 'Logos'
+    )
+  );
+$$;
+grant execute on function public.get_creator_sidebar_counts(uuid) to anon, authenticated;
+
+-- =============================================================================
+-- Analytics RPCs (admin-only; called via the service-role client which bypasses
+-- RLS). Aggregate inside Postgres so the analytics page never pulls raw event
+-- rows to JS. Persisted here so a fresh deploy doesn't lose them.
+-- =============================================================================
+
+-- get_per_user_activity(activity_date) — per-user copy activity for one IST day:
+-- one row per user who copied that day, with their copy count, the components
+-- they copied (most recent first) and their most recent copy time. Ordered by
+-- most recent copy. Powers the "Per-user activity" table.
+drop function if exists public.get_per_user_activity(date);
+create or replace function public.get_per_user_activity(activity_date date)
+returns table (
+  user_id       uuid,
+  copies_count  bigint,
+  component_ids uuid[],
+  last_copy     timestamptz
+)
+language sql
+stable
+as $$
+  select
+    ce.user_id,
+    count(*) as copies_count,
+    array_agg(ce.component_id order by ce.copied_at desc) as component_ids,
+    max(ce.copied_at) as last_copy
+  from public.copy_events ce
+  where ce.date = activity_date
+    and ce.user_id is not null
+  group by ce.user_id
+  order by max(ce.copied_at) desc;
+$$;
+
+-- get_analytics_windows(d_today, d_start7, d_date) — all KPI windows in a single
+-- round trip as a JSON object keyed by window ('today','7d','all', and 'date'
+-- when d_date is non-null). Each value: totalCopies, uniqueCopiers, totalLogins,
+-- dau, newAccounts, byCategory. dau = average daily active users (distinct users
+-- who logged in OR copied per day, averaged over the window's days; today/date =
+-- that day's count). All metrics computed in-DB.
+create or replace function public.get_analytics_windows(
+  d_today  date,
+  d_start7 date,
+  d_date   date default null
+)
+returns jsonb
+language plpgsql
+stable
+as $$
+declare
+  result jsonb;
+begin
+  with
+  ca as (
+    select
+      count(*)                   filter (where ce.date = d_today)                   as t_total,
+      count(distinct ce.user_id) filter (where ce.date = d_today)                   as t_uniq,
+      count(*)                   filter (where ce.date between d_start7 and d_today) as w_total,
+      count(distinct ce.user_id) filter (where ce.date between d_start7 and d_today) as w_uniq,
+      count(*)                                                                       as a_total,
+      count(distinct ce.user_id)                                                     as a_uniq,
+      count(*)                   filter (where d_date is not null and ce.date = d_date) as d_total,
+      count(distinct ce.user_id) filter (where d_date is not null and ce.date = d_date) as d_uniq
+    from public.copy_events ce where ce.date <= d_today
+  ),
+  la as (
+    select
+      count(*) filter (where le.date = d_today)                   as t_total,
+      count(*) filter (where le.date between d_start7 and d_today) as w_total,
+      count(*)                                                     as a_total,
+      count(*) filter (where d_date is not null and le.date = d_date) as d_total
+    from public.login_events le where le.date <= d_today
+  ),
+  pa as (
+    select
+      count(*) filter (where d::date = d_today)                   as t_new,
+      count(*) filter (where d::date between d_start7 and d_today) as w_new,
+      count(*)                                                     as a_new,
+      count(*) filter (where d_date is not null and d::date = d_date) as d_new
+    from (select (p.created_at at time zone 'Asia/Kolkata') as d from public.profiles p) s
+  ),
+  cat as (
+    select c.category,
+      count(*) filter (where ce.date = d_today)                   as t_c,
+      count(*) filter (where ce.date between d_start7 and d_today) as w_c,
+      count(*)                                                     as a_c,
+      count(*) filter (where d_date is not null and ce.date = d_date) as d_c
+    from public.copy_events ce
+    join public.components c on c.id = ce.component_id
+    where ce.date <= d_today
+    group by c.category
+  ),
+  act as (
+    select user_id, date from public.copy_events  where date <= d_today and user_id is not null
+    union all
+    select user_id, date from public.login_events where date <= d_today and user_id is not null
+  ),
+  dd as (select date, count(distinct user_id) as u from act group by date),
+  ad as (
+    select
+      round(coalesce(sum(u) filter (where date = d_today), 0))::int as t_dau,
+      round(coalesce(sum(u) filter (where date between d_start7 and d_today), 0)::numeric
+            / greatest(1, (d_today - d_start7 + 1)))::int as w_dau,
+      round(coalesce(sum(u), 0)::numeric
+            / greatest(1, (d_today - coalesce(min(date), d_today) + 1)))::int as a_dau,
+      round(coalesce(sum(u) filter (where d_date is not null and date = d_date), 0))::int as d_dau
+    from dd
+  )
+  select jsonb_build_object(
+    'today', jsonb_build_object(
+      'totalCopies', ca.t_total, 'uniqueCopiers', ca.t_uniq,
+      'totalLogins', la.t_total, 'dau', ad.t_dau, 'newAccounts', pa.t_new,
+      'byCategory', (select coalesce(jsonb_object_agg(category, t_c) filter (where category is not null), '{}'::jsonb) from cat)),
+    '7d', jsonb_build_object(
+      'totalCopies', ca.w_total, 'uniqueCopiers', ca.w_uniq,
+      'totalLogins', la.w_total, 'dau', ad.w_dau, 'newAccounts', pa.w_new,
+      'byCategory', (select coalesce(jsonb_object_agg(category, w_c) filter (where category is not null), '{}'::jsonb) from cat)),
+    'all', jsonb_build_object(
+      'totalCopies', ca.a_total, 'uniqueCopiers', ca.a_uniq,
+      'totalLogins', la.a_total, 'dau', ad.a_dau, 'newAccounts', pa.a_new,
+      'byCategory', (select coalesce(jsonb_object_agg(category, a_c) filter (where category is not null), '{}'::jsonb) from cat)),
+    'date', case when d_date is null then null else jsonb_build_object(
+      'totalCopies', ca.d_total, 'uniqueCopiers', ca.d_uniq,
+      'totalLogins', la.d_total, 'dau', ad.d_dau, 'newAccounts', pa.d_new,
+      'byCategory', (select coalesce(jsonb_object_agg(category, d_c) filter (where category is not null), '{}'::jsonb) from cat)) end
+  ) into result from ca, la, pa, ad;
+  return result;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- get_component_detail(p_id) — one component (NO figma_data) joined with its
+-- creator's public profile, in a single call. Drives the component detail view.
+-- Visible to anyone for published+public components; the owner and admins may
+-- read their own / any (incl. pending / private / rejected). SECURITY DEFINER so
+-- the gating is explicit (admins have no broad components SELECT policy).
+-- ---------------------------------------------------------------------------
+create or replace function public.get_component_detail(p_id uuid)
+returns table (
+  id                   uuid,
+  category             text,
+  section              text,
+  filters              text[],
+  copy_count           int,
+  figma_url            text,
+  preview_url          text,
+  aspect_ratio         numeric,
+  colors               jsonb,
+  is_published         boolean,
+  is_private           boolean,
+  status               text,
+  featured             boolean,
+  created_at           timestamptz,
+  uploaded_by          uuid,
+  creator_username      text,
+  creator_display_name  text,
+  creator_avatar_url    text,
+  creator_bio           text,
+  creator_x_handle      text,
+  creator_instagram_handle text,
+  creator_linkedin_handle  text,
+  creator_website_url   text,
+  creator_cta_url       text,
+  creator_design_count  bigint
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    c.id, c.category, c.section, c.filters, c.copy_count, c.figma_url,
+    c.preview_url, c.aspect_ratio, c.colors, c.is_published, c.is_private,
+    c.status, c.featured, c.created_at, c.uploaded_by,
+    p.username   as creator_username,
+    p.full_name  as creator_display_name,
+    p.avatar_url as creator_avatar_url,
+    p.bio        as creator_bio,
+    p.x_handle, p.instagram_handle, p.linkedin_handle, p.website_url, p.cta_url,
+    coalesce((
+      select count(*) from public.components c2
+      where c2.uploaded_by = c.uploaded_by
+        and c2.is_published = true and c2.is_private = false
+        and c2.status = 'approved'
+    ), 0) as creator_design_count
+  from public.components c
+  left join public.profiles p on p.id = c.uploaded_by
+  where c.id = p_id
+    and (
+      (c.is_published = true and c.is_private = false)
+      or c.uploaded_by = auth.uid()
+      or exists (
+        select 1 from public.profiles me
+        where me.id = auth.uid() and me.role = 'admin'
+      )
+    );
+$$;
+grant execute on function public.get_component_detail(uuid) to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- get_creator_by_id(p_id) — the per-CREATOR lightbox card (public profile +
+-- live published design_count), keyed by uploaded_by. The gallery row already
+-- carries the per-component bits (copy_count, created_at, figma_url), so the
+-- lightbox fetches creator data once per creator and caches it client-side by
+-- uploaded_by — opening any of a creator's components costs at most one call.
+-- SECURITY DEFINER: profiles RLS is "own row only", so this is the public read
+-- path. Returns no row for a null/unknown id (admin uploads have no creator).
+-- ---------------------------------------------------------------------------
+-- Return columns changed (added is_admin) → drop before recreate.
+drop function if exists public.get_creator_by_id(uuid);
+create or replace function public.get_creator_by_id(p_id uuid)
+returns table (
+  creator_username      text,
+  creator_display_name  text,
+  creator_avatar_url    text,
+  creator_bio           text,
+  creator_x_handle      text,
+  creator_instagram_handle text,
+  creator_linkedin_handle  text,
+  creator_website_url   text,
+  creator_cta_url       text,
+  creator_design_count  bigint,
+  is_admin              boolean
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    p.username, p.full_name, p.avatar_url, p.bio,
+    p.x_handle, p.instagram_handle, p.linkedin_handle, p.website_url, p.cta_url,
+    coalesce((
+      select count(*) from public.components c2
+      where c2.uploaded_by = p.id
+        and c2.is_published = true and c2.is_private = false
+        and c2.status = 'approved'
+    ), 0) as creator_design_count,
+    -- Admin uploads have no real creator profile → the client renders a fixed
+    -- "Lander Studio" agency card instead of the admin's personal profile.
+    (p.role = 'admin') as is_admin
+  from public.profiles p
+  where p.id = p_id;
+$$;
+grant execute on function public.get_creator_by_id(uuid) to anon, authenticated;

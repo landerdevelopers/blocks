@@ -10,7 +10,8 @@
       "Bash(rmdir app/login)",
       "Bash(ls middleware.ts)",
       "Bash(grep -rn \"router.push\\\\|/login\" components/AuthProvider.tsx)",
-      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(JSON.stringify\\({...p.dependencies,...p.devDependencies},null,1\\)\\)\")"
+      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(JSON.stringify\\({...p.dependencies,...p.devDependencies},null,1\\)\\)\")",
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")"
     ]
   }
 }

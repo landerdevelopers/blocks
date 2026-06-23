@@ -11,8 +11,19 @@ import {
   type MouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, Megaphone, Pencil, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  ArrowUp,
+  Calendar,
+  Copy,
+  Globe,
+  Megaphone,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { XIcon, InstagramIcon, LinkedinIcon } from "@/components/social-icons";
+import { revalidateSidebarCounts } from "@/app/actions";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 import {
   readComponentsCache,
@@ -20,6 +31,64 @@ import {
 } from "@/lib/componentsCache";
 import { cloudflareThumb, cloudflareFull, cloudflareLogo } from "@/lib/utils";
 type Component = GalleryComponent;
+
+// One row from get_creator_by_id — the per-CREATOR lightbox card. Fetched once
+// per creator and cached by uploaded_by, so opening many of a creator's
+// components never re-hits the DB for this. The per-COMPONENT bits (copy_count,
+// created_at, figma_url) come straight off the gallery row — see LightboxDetail.
+type CreatorDetail = {
+  creator_username: string | null;
+  creator_display_name: string | null;
+  creator_avatar_url: string | null;
+  creator_bio: string | null;
+  creator_x_handle: string | null;
+  creator_instagram_handle: string | null;
+  creator_linkedin_handle: string | null;
+  creator_website_url: string | null;
+  creator_cta_url: string | null;
+  creator_design_count: number;
+  // True when the uploader is an admin (no real creator profile). The lightbox
+  // then renders the fixed Lander Studio agency card (see LANDER).
+  is_admin: boolean;
+};
+
+// What the lightbox panels read — per-component bits off the gallery row merged
+// with the cached creator card.
+type LightboxDetail = CreatorDetail & {
+  copy_count: number;
+  figma_url: string | null;
+  created_at: string;
+};
+
+// Admin uploads have no real creator — show Lander Studio (the house agency)
+// instead. Website + LinkedIn + Hire all point at lander.studio. design_count
+// is left to the real per-uploader count from the RPC.
+const LANDER: Omit<CreatorDetail, "creator_design_count"> = {
+  creator_username: "lander-studio",
+  creator_display_name: "Lander Studio",
+  creator_avatar_url: "/Lander_black.png",
+  creator_bio:
+    "Design agency crafting standout websites, brands, and product experiences.",
+  creator_x_handle: null,
+  creator_instagram_handle: null,
+  creator_linkedin_handle: "https://www.linkedin.com/company/lander-studio/",
+  creator_website_url: "https://lander.studio",
+  creator_cta_url: "https://lander.studio",
+  is_admin: true,
+};
+
+// "1.2K", "12", "1.3M" — compact copy counts.
+const fmtCount = (n: number) =>
+  Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(
+    n ?? 0,
+  );
+// "Jun 20, 2026".
+const fmtPosted = (iso: string) =>
+  new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 
 const PAGE_SIZE = 24;
 
@@ -93,6 +162,8 @@ export default function Gallery({
   colorSearchResults = null,
   colorSearchHasMore = false,
   onColorSearchLoadMore,
+  initialCategoryCounts,
+  creatorRestorePending = false,
 }: {
   cols?: number;
   loggedIn: boolean;
@@ -111,7 +182,16 @@ export default function Gallery({
   colorSearchResults?: Component[] | null;
   colorSearchHasMore?: boolean;
   onColorSearchLoadMore?: () => void;
+  // Per-category published totals from the server (get_sidebar_counts, cached
+  // 30min, passed down from the page). Seeds the store so the gallery has true
+  // category totals without firing its own count queries on load.
+  initialCategoryCounts?: Record<string, number>;
+  // True while a ?creator= URL param is still being resolved to an id on load.
+  // Holds the gallery on skeletons instead of fetching the unscoped list and
+  // then snapping to the creator (flash).
+  creatorRestorePending?: boolean;
 }) {
+  const router = useRouter();
   const isAdmin = useAuthStore((s) => s.isAdmin);
   const authLoading = useAuthStore((s) => s.authLoading);
   // Shared list in the store so new uploads appear instantly (no refetch).
@@ -176,9 +256,12 @@ export default function Gallery({
       let query = createClient()
         .from("components")
         .select(
-          "id, category, section, filters, figma_url, preview_url, aspect_ratio, colors, featured, featured_at",
+          "id, category, section, filters, figma_url, preview_url, aspect_ratio, featured, featured_at, uploaded_by, created_at, copy_count",
         )
-        .eq("is_published", true);
+        // Never show private designs — not even to their owner — in the gallery.
+        // (RLS lets an owner read their own private rows, so filter explicitly.)
+        .eq("is_published", true)
+        .eq("is_private", false);
       if (creatorId) query = query.eq("uploaded_by", creatorId);
       if (dbCat) query = query.eq("category", dbCat);
       // Creator view follows the creator's manual arrangement (creator_pinned_at),
@@ -248,6 +331,15 @@ export default function Gallery({
   // clear to skeletons, flip the filter category, and fetch page 0.
   useEffect(() => {
     const cat = category ?? "website";
+    // A ?creator= param is still resolving to an id (Sidebar's get_creator).
+    // Hold on skeletons rather than fetch the unscoped all-creators list — once
+    // the id lands, creatorId changes and this effect re-runs scoped to it.
+    if (creatorRestorePending && !creatorId) {
+      setCurrentCategory(cat);
+      setDisplayCategory(category);
+      clearComponents();
+      return;
+    }
     const cacheKey = creatorId ? `creator:${creatorId}:${cat}` : cat;
     setCurrentCategory(cat);
     setHasMore(true);
@@ -267,7 +359,7 @@ export default function Gallery({
     fetchingPageRef.current = false;
     fetchPage(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, creatorId]);
+  }, [category, creatorId, creatorRestorePending]);
 
   // Reset scroll to the top on every category switch. Runs in a LAYOUT effect
   // keyed on the rendered category so it fires AFTER the new content commits —
@@ -279,40 +371,11 @@ export default function Gallery({
   }, [displayCategory]);
 
   // Total published counts per category — drives the skeleton slots beyond the
-  // loaded page. Deferred ~2s after mount so these 4 count(*) queries don't
-  // compete with the critical page-0 fetch (which puts the images in the DOM).
+  // loaded page. Seeded from the server's get_sidebar_counts (passed as a prop),
+  // so the gallery no longer fires its own per-category count() queries on load.
   useEffect(() => {
-    let alive = true;
-    const fetchAllCounts = async () => {
-      const cats = [
-        "Website",
-        "Mobile Apps",
-        "Dashboard",
-        "Logos",
-        "Illustrations",
-      ];
-      const results = await Promise.all(
-        cats.map((cat) =>
-          createClient()
-            .from("components")
-            .select("*", { count: "exact", head: true })
-            .eq("category", cat)
-            .eq("is_published", true),
-        ),
-      );
-      if (!alive) return;
-      const counts: Record<string, number> = {};
-      cats.forEach((cat, i) => {
-        counts[cat] = results[i].count ?? 0;
-      });
-      setCategoryCounts(counts);
-    };
-    const timer = setTimeout(fetchAllCounts, 2000);
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [setCategoryCounts]);
+    if (initialCategoryCounts) setCategoryCounts(initialCategoryCounts);
+  }, [setCategoryCounts, initialCategoryCounts]);
 
   // Preload the copied-state icon so the figma→tick swap doesn't flash/break.
   useEffect(() => {
@@ -403,13 +466,16 @@ export default function Gallery({
     );
     observer.observe(el);
     return () => observer.disconnect();
+    // Re-attach when the observed skeleton element can move (more cards loaded)
+    // or the fetch closure changes (category/creator switch). categoryCounts is
+    // NOT a dep — it isn't read here and only changes the skeleton COUNT, not
+    // which element we observe.
   }, [
     hasMore,
     isFetching,
     currentPage,
     colorSearchActive,
     components.length,
-    categoryCounts,
     fetchPage,
   ]);
 
@@ -422,8 +488,17 @@ export default function Gallery({
     if (el.scrollHeight <= el.clientHeight) {
       fetchPage(currentPage + 1);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [components.length, hasMore, isFetching, currentPage, colorSearchActive]);
+    // fetchPage is included so a category/creator switch re-runs the fill check
+    // with the fresh closure (it's a useCallback keyed on category/creatorId, so
+    // this can't loop) — no stale-closure risk, no eslint-disable needed.
+  }, [
+    components.length,
+    hasMore,
+    isFetching,
+    currentPage,
+    colorSearchActive,
+    fetchPage,
+  ]);
 
   // Infinite scroll for color search — reveal the next slice of RPC results.
   useEffect(() => {
@@ -471,6 +546,11 @@ export default function Gallery({
     }
     removeComponent(confirmDelete);
     setConfirmDelete(null);
+    // Refresh the (server-cached) sidebar count badges: mark them stale, then
+    // re-render the server component so the new global counts reach the sidebar.
+    // The creator-scoped counts refresh via the store's componentsVersion bump.
+    revalidateSidebarCounts().catch(() => {});
+    router.refresh();
   };
 
   // Delete confirmation modal — portal'd so it overlays everything.
@@ -532,7 +612,7 @@ export default function Gallery({
 
   // Lightbox.
   const [lightbox, setLightbox] = useState<
-    { src: string; logo: boolean; aspectRatio: number | null } | null
+    { id: string; src: string; logo: boolean; aspectRatio: number | null } | null
   >(null);
   // Full-res image load state — skeleton (sized to aspect ratio) shows until
   // it's true. Reset whenever a new image opens.
@@ -548,6 +628,127 @@ export default function Gallery({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [lightbox]);
+
+  // Lightbox side panels. The per-COMPONENT bits (copy_count, created_at,
+  // figma_url) ride on the already-loaded gallery row → ZERO fetch on open. The
+  // per-CREATOR card is fetched once per creator and cached by uploaded_by, so
+  // opening any number of a creator's components costs at most one creator
+  // fetch. At scale (1000s of components, far fewer creators) per-open DB cost
+  // collapses from O(components opened) to O(distinct creators seen).
+  const lbRow = useMemo(
+    () =>
+      lightbox ? components.find((c) => c.id === lightbox.id) ?? null : null,
+    [lightbox, components],
+  );
+  const [creator, setCreator] = useState<CreatorDetail | null>(null);
+  const creatorCache = useRef<Map<string, CreatorDetail>>(new Map());
+  useEffect(() => {
+    const uid = lbRow?.uploaded_by;
+    if (!uid) {
+      setCreator(null); // admin upload (no creator) → empty creator column
+      return;
+    }
+    const cached = creatorCache.current.get(uid);
+    if (cached) {
+      setCreator(cached); // instant, no fetch
+      return;
+    }
+    setCreator(null); // skeleton while this creator's first fetch resolves
+    let alive = true;
+    createClient()
+      .rpc("get_creator_by_id", { p_id: uid })
+      .then(({ data }) => {
+        if (!alive) return;
+        const row = (Array.isArray(data) ? data[0] : data) as
+          | CreatorDetail
+          | null
+          | undefined;
+        if (row) {
+          creatorCache.current.set(uid, row);
+          setCreator(row);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [lbRow?.uploaded_by]);
+
+  // Combined view the panels render from: per-component bits off the row +
+  // cached creator. Present (non-skeleton) the instant a row is open.
+  const detail = useMemo<LightboxDetail | null>(() => {
+    if (!lbRow) return null;
+    // Admin uploads → show the fixed Lander Studio card (keep the real
+    // per-uploader design count).
+    const c = creator?.is_admin
+      ? { ...LANDER, creator_design_count: creator.creator_design_count }
+      : creator;
+    return {
+      copy_count: lbRow.copy_count ?? 0,
+      figma_url: lbRow.figma_url,
+      created_at: lbRow.created_at ?? "",
+      creator_username: c?.creator_username ?? null,
+      creator_display_name: c?.creator_display_name ?? null,
+      creator_avatar_url: c?.creator_avatar_url ?? null,
+      creator_bio: c?.creator_bio ?? null,
+      creator_x_handle: c?.creator_x_handle ?? null,
+      creator_instagram_handle: c?.creator_instagram_handle ?? null,
+      creator_linkedin_handle: c?.creator_linkedin_handle ?? null,
+      creator_website_url: c?.creator_website_url ?? null,
+      creator_cta_url: c?.creator_cta_url ?? null,
+      creator_design_count: c?.creator_design_count ?? 0,
+      is_admin: c?.is_admin ?? false,
+    };
+  }, [lbRow, creator]);
+  // Lander card (admin upload) — its name link + Hire go to lander.studio, and
+  // its LinkedIn is a full company URL rather than an /in/ handle.
+  const isLanderCard = detail?.is_admin ?? false;
+  // Creator-card skeleton shows only when the row HAS a creator we haven't
+  // loaded yet (reserves the column so the image never shifts).
+  const creatorPending = !!lbRow?.uploaded_by && !creator;
+
+  // Lightbox "Copy to Figma" — same gated record_copy + clipboard pattern as the
+  // card button, keyed to the open component.
+  const [lbCopied, setLbCopied] = useState(false);
+  const [lbCopying, setLbCopying] = useState(false);
+  useEffect(() => {
+    setLbCopied(false);
+    setLbCopying(false);
+  }, [lightbox?.id]);
+  const copyFromLightbox = (e: MouseEvent) => {
+    e.stopPropagation();
+    if (!lightbox || copyLockRef.current || authLoading) return;
+    if (!loggedIn) {
+      onRequireLogin();
+      return;
+    }
+    copyLockRef.current = true;
+    setLbCopying(true);
+    const figmaUrl = detail?.figma_url ?? null;
+    const resolved = onCopy(lightbox.id).then((res) => {
+      if (!res.allowed) throw new Error("copy-not-allowed");
+      return res.figmaData;
+    });
+    navigator.clipboard
+      .write([
+        new ClipboardItem({
+          "text/html": resolved.then(
+            (fd) => new Blob([fd || figmaUrl || ""], { type: "text/html" }),
+          ),
+          "text/plain": resolved.then(
+            () => new Blob([figmaUrl || ""], { type: "text/plain" }),
+          ),
+        }),
+      ])
+      .then(() => {
+        setLbCopied(true);
+        setTimeout(() => setLbCopied(false), 2000);
+      })
+      .catch(() => {})
+      .finally(() => {
+        copyLockRef.current = false;
+        setLbCopying(false);
+      });
+  };
 
   // Admin: pin a component to the very top. Sets featured + a fresh featured_at
   // (the sort key) in the DB; optimistically marks it featured and moves it to
@@ -835,63 +1036,284 @@ export default function Gallery({
             className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/80 p-8 backdrop-blur-sm"
           >
             <div
-              onClick={(e) => e.stopPropagation()}
-              className="relative inline-block"
+              className="flex max-w-[96vw] items-start gap-3"
             >
-              <button
-                type="button"
-                onClick={() => setLightbox(null)}
-                aria-label="Close"
-                className="absolute right-3 top-3 z-10 flex size-9 cursor-pointer items-center justify-center rounded-full border border-white/15 bg-black/40 text-white backdrop-blur-md transition-colors hover:bg-black/60"
+              {/* Left — creator card (desktop only; only for creator uploads).
+                  Clicks on the actual cards/image are stopped so they don't close
+                  the lightbox; clicking the surrounding empty area / gaps does. */}
+              <div className="hidden w-[240px] shrink-0 self-start lg:flex">
+                {detail?.creator_username ? (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex w-full flex-col gap-3 rounded-xl bg-white p-3 shadow-[0px_12px_40px_rgba(0,0,0,0.4)]"
+                  >
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-start gap-2.5">
+                        <span
+                          className={`flex size-[42px] shrink-0 items-center justify-center overflow-hidden rounded-lg text-sm font-medium text-[#09090b] ${
+                            isLanderCard
+                              ? "border border-[#e7e9ee]"
+                              : "bg-[#ebebef]"
+                          }`}
+                        >
+                          {detail.creator_avatar_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              alt=""
+                              src={detail.creator_avatar_url}
+                              referrerPolicy="no-referrer"
+                              className={
+                                isLanderCard
+                                  ? "size-full object-contain p-1"
+                                  : "size-full object-cover"
+                              }
+                            />
+                          ) : (
+                            (detail.creator_display_name ??
+                              detail.creator_username)
+                              .charAt(0)
+                              .toUpperCase()
+                          )}
+                        </span>
+                        <div className="flex flex-col justify-center">
+                          <a
+                            href={
+                              isLanderCard
+                                ? detail.creator_website_url ?? "#"
+                                : `/creators/${detail.creator_username}`
+                            }
+                            target={isLanderCard ? "_blank" : undefined}
+                            rel={isLanderCard ? "noopener noreferrer" : undefined}
+                            className="text-[16px] font-medium tracking-[-0.03em] text-black hover:underline"
+                          >
+                            {detail.creator_display_name ??
+                              detail.creator_username}
+                          </a>
+                          <span className="text-[14px] tracking-[-0.01em] text-[#6f6f6f]">
+                            {detail.creator_design_count} Design
+                            {detail.creator_design_count === 1 ? "" : "s"}{" "}
+                            Uploaded
+                          </span>
+                        </div>
+                      </div>
+                      {detail.creator_bio && (
+                        <p className="whitespace-pre-wrap text-[15px] tracking-[-0.02em] text-[#71717b]">
+                          {detail.creator_bio}
+                        </p>
+                      )}
+                    </div>
+
+                    {(detail.creator_website_url ||
+                      detail.creator_x_handle ||
+                      detail.creator_instagram_handle ||
+                      detail.creator_linkedin_handle ||
+                      detail.creator_cta_url) && (
+                      <div className="flex flex-col gap-2.5">
+                        {(detail.creator_website_url ||
+                          detail.creator_x_handle ||
+                          detail.creator_instagram_handle ||
+                          detail.creator_linkedin_handle) && (
+                          <div className="flex gap-1.5">
+                            {detail.creator_website_url && (
+                              <a
+                                href={detail.creator_website_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label="Website"
+                                className="flex min-h-9 flex-1 items-center justify-center rounded-full bg-[#f4f4f6] text-[#52525b] transition-colors hover:text-black"
+                              >
+                                <Globe size={17} strokeWidth={1.5} />
+                              </a>
+                            )}
+                            {detail.creator_x_handle && (
+                              <a
+                                href={`https://x.com/${detail.creator_x_handle}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label="X"
+                                className="flex min-h-9 flex-1 items-center justify-center rounded-full bg-[#f4f4f6] text-[#52525b] transition-colors hover:text-black"
+                              >
+                                <XIcon size={15} />
+                              </a>
+                            )}
+                            {detail.creator_instagram_handle && (
+                              <a
+                                href={`https://instagram.com/${detail.creator_instagram_handle}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label="Instagram"
+                                className="flex min-h-9 flex-1 items-center justify-center rounded-full bg-[#f4f4f6] text-[#52525b] transition-colors hover:text-black"
+                              >
+                                <InstagramIcon size={16} />
+                              </a>
+                            )}
+                            {detail.creator_linkedin_handle && (
+                              <a
+                                href={
+                                  detail.creator_linkedin_handle.startsWith(
+                                    "http",
+                                  )
+                                    ? detail.creator_linkedin_handle
+                                    : `https://linkedin.com/in/${detail.creator_linkedin_handle}`
+                                }
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label="LinkedIn"
+                                className="flex min-h-9 flex-1 items-center justify-center rounded-full bg-[#f4f4f6] text-[#52525b] transition-colors hover:text-black"
+                              >
+                                <LinkedinIcon size={16} />
+                              </a>
+                            )}
+                          </div>
+                        )}
+                        {detail.creator_cta_url && (
+                          <a
+                            href={detail.creator_cta_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex min-h-9 items-center justify-center gap-1.5 rounded-lg bg-[#2974ff] px-4 py-2 text-[14px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6]"
+                          >
+                            Hire Creator
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : creatorPending ? (
+                  // Skeleton while this creator's card loads (reserves the column
+                  // so the image doesn't shift when the card lands). Admin uploads
+                  // have no creator → column stays empty; its fixed width still
+                  // reserves the space, so nothing shifts.
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex w-full flex-col gap-3 rounded-xl bg-white p-3 shadow-[0px_12px_40px_rgba(0,0,0,0.4)]"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="size-[42px] shrink-0 animate-pulse rounded-lg bg-[#ebebef]" />
+                      <div className="flex flex-col gap-1.5">
+                        <div className="h-3.5 w-24 animate-pulse rounded bg-[#ebebef]" />
+                        <div className="h-3 w-28 animate-pulse rounded bg-[#ebebef]" />
+                      </div>
+                    </div>
+                    <div className="h-3 w-full animate-pulse rounded bg-[#ebebef]" />
+                    <div className="h-3 w-3/4 animate-pulse rounded bg-[#ebebef]" />
+                    <div className="flex gap-1.5">
+                      {Array.from({ length: 4 }).map((_, i) => (
+                        <div
+                          key={i}
+                          className="h-9 flex-1 animate-pulse rounded-full bg-[#ebebef]"
+                        />
+                      ))}
+                    </div>
+                    <div className="h-9 w-full animate-pulse rounded-lg bg-[#ebebef]" />
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Center — image + close. */}
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="relative shrink-0"
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                </svg>
-              </button>
-              {lightbox.logo ? (
-                // Fixed square box so every logo opens at the same size (no
-                // per-logo sizing or blank-then-resize jump).
-                <div className="flex size-[min(90vw,520px)] items-center justify-center rounded-xl bg-white p-16 shadow-[0px_12px_40px_rgba(0,0,0,0.4)]">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img alt="" src={cloudflareFull(lightbox.src)} className="size-full object-contain" />
-                </div>
-              ) : (
-                // Reserve exact space from the stored aspect ratio so a
-                // skeleton can fill it while the full-res image loads.
-                <div
-                  className="w-[90vw] max-w-[calc(85vh*var(--ar))] rounded-xl shadow-[0px_12px_40px_rgba(0,0,0,0.4)]"
-                  style={
-                    {
-                      "--ar": lightbox.aspectRatio ?? 1.7778,
-                      position: "relative",
-                      paddingBottom: lightbox.aspectRatio
-                        ? `${(1 / lightbox.aspectRatio) * 100}%`
-                        : "56.25%",
-                    } as CSSProperties
-                  }
+                <button
+                  type="button"
+                  onClick={() => setLightbox(null)}
+                  aria-label="Close"
+                  className="absolute right-3 top-3 z-10 flex size-9 cursor-pointer items-center justify-center rounded-full border border-white/15 bg-black/40 text-white backdrop-blur-md transition-colors hover:bg-black/60"
                 >
-                  {!fullLoaded && (
-                    <div className="skeleton-shimmer absolute inset-0 rounded-xl" />
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                  </svg>
+                </button>
+                {lightbox.logo ? (
+                  <div className="flex size-[min(82vw,460px)] items-center justify-center rounded-xl bg-white p-16 shadow-[0px_12px_40px_rgba(0,0,0,0.4)]">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img alt="" src={cloudflareFull(lightbox.src)} className="size-full object-contain" />
+                  </div>
+                ) : (
+                  <div
+                    className="w-[88vw] max-w-[calc(82vh*var(--ar))] rounded-xl shadow-[0px_12px_40px_rgba(0,0,0,0.4)] lg:w-[58vw]"
+                    style={
+                      {
+                        "--ar": lightbox.aspectRatio ?? 1.7778,
+                        position: "relative",
+                        paddingBottom: lightbox.aspectRatio
+                          ? `${(1 / lightbox.aspectRatio) * 100}%`
+                          : "56.25%",
+                      } as CSSProperties
+                    }
+                  >
+                    {!fullLoaded && (
+                      <div className="skeleton-shimmer absolute inset-0 rounded-xl" />
+                    )}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      alt=""
+                      src={cloudflareFull(lightbox.src)}
+                      onLoad={() => setFullLoaded(true)}
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "contain",
+                        opacity: fullLoaded ? 1 : 0,
+                        transition: "opacity 0.3s ease",
+                      }}
+                      className="rounded-xl"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Right — copy + posted date + total copies (desktop only). */}
+              <div className="hidden w-[151px] shrink-0 flex-col gap-3 self-start lg:flex">
+                <button
+                  type="button"
+                  onClick={copyFromLightbox}
+                  className="flex cursor-pointer items-center justify-center gap-[4px] rounded-[12px] bg-white px-[12px] py-[6.5px] text-[16px] font-medium tracking-[-0.03em] text-[#09090b] shadow-[0px_12px_40px_rgba(0,0,0,0.4)] transition-colors hover:bg-[#ededed]"
+                >
+                  {lbCopying ? (
+                    <span className="size-5 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70" />
+                  ) : lbCopied ? (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img alt="" src="/Tick.png" className="size-4.5" />
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img alt="" src="/figma.png" className="size-5" />
+                      Copy to Figma
+                    </>
                   )}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    alt=""
-                    src={cloudflareFull(lightbox.src)}
-                    onLoad={() => setFullLoaded(true)}
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "contain",
-                      opacity: fullLoaded ? 1 : 0,
-                      transition: "opacity 0.3s ease",
-                    }}
-                    className="rounded-xl"
-                  />
-                </div>
-              )}
+                </button>
+                {detail ? (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex h-[76px] flex-col justify-center gap-2 rounded-[12px] bg-white px-4 text-[14px] tracking-[-0.03em] text-[#52525b] shadow-[0px_12px_40px_rgba(0,0,0,0.4)]"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Calendar size={16} strokeWidth={1.5} className="text-[#a1a1aa]" />
+                      {fmtPosted(detail.created_at)}
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <Copy size={16} strokeWidth={1.5} className="text-[#a1a1aa]" />
+                      {fmtCount(detail.copy_count)} Copies
+                    </span>
+                  </div>
+                ) : (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex h-[76px] flex-col justify-center gap-2.5 rounded-2xl bg-white px-4 shadow-[0px_12px_40px_rgba(0,0,0,0.4)]"
+                  >
+                    <div className="h-4 w-28 animate-pulse rounded bg-[#ebebef]" />
+                    <div className="h-4 w-20 animate-pulse rounded bg-[#ebebef]" />
+                  </div>
+                )}
+              </div>
             </div>
           </div>,
           document.body,
@@ -923,6 +1345,7 @@ export default function Gallery({
                     onClick={() =>
                       c.preview_url &&
                       setLightbox({
+                        id: c.id,
                         src: c.preview_url,
                         logo: false,
                         aspectRatio: c.aspect_ratio,
@@ -1244,6 +1667,7 @@ export default function Gallery({
                   onClick={() =>
                     c.preview_url &&
                     setLightbox({
+                      id: c.id,
                       src: c.preview_url,
                       logo: false,
                       aspectRatio: c.aspect_ratio,

@@ -20,7 +20,10 @@ const getSidebarCounts = unstable_cache(
     const { data } = await createAdminClient().rpc("get_sidebar_counts");
     return (data as SidebarCounts | null) ?? EMPTY_COUNTS;
   },
-  ["sidebar_counts"],
+  // v2: bump the cache key to discard the pre-private-filter entry (a stale
+  // cached count survived the RPC fix). Tag stays "sidebar_counts" so on-demand
+  // revalidation keeps working.
+  ["sidebar_counts_v2"],
   { tags: ["sidebar_counts"], revalidate: 1800 },
 );
 

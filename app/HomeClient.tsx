@@ -168,6 +168,15 @@ function HomeInner({
   // When set (from the sidebar "All Creators" popup), the gallery shows only
   // this creator's designs instead of the category list.
   const [creatorId, setCreatorId] = useState<string | null>(null);
+  // On refresh with ?creator=<username>, resolving the username → id is async
+  // (Sidebar's get_creator). Until it resolves, hold the gallery on skeletons
+  // instead of loading the unscoped all-creators list and then snapping to the
+  // creator (the flash). Seeded synchronously from the URL so the very first
+  // render already knows a creator is pending. Sidebar clears it when the
+  // restore resolves (whether the creator was found or not).
+  const [creatorRestorePending, setCreatorRestorePending] = useState(
+    () => !!searchParams.get("creator"),
+  );
   const [used, setUsed] = useState(0);
   const [showLimit, setShowLimit] = useState(false);
   const [showSuggest, setShowSuggest] = useState(false);
@@ -215,6 +224,7 @@ function HomeInner({
           "id, category, section, filters, preview_url, aspect_ratio, colors, colors_hsl",
         )
         .eq("is_published", true)
+        .eq("is_private", false)
         .order("created_at", { ascending: false });
       colorSearchPool.current = (data as unknown as GalleryComponent[]) ?? [];
       colorSearchPoolLoaded.current = true;
@@ -492,6 +502,7 @@ function HomeInner({
         activeCategory={activeCategory}
         onBecomeCreator={becomeCreator}
         onCreatorSelect={setCreatorId}
+        onCreatorRestoreDone={() => setCreatorRestorePending(false)}
         sidebarCounts={initialSidebarCounts}
       />
       {/* Gallery panel — rounded top-left corner; the banner scrolls with the
@@ -510,6 +521,8 @@ function HomeInner({
           colorSearchResults={colorSearchResults}
           colorSearchHasMore={colorSearchHasMore}
           onColorSearchLoadMore={loadMoreColorSearch}
+          initialCategoryCounts={initialSidebarCounts.categories}
+          creatorRestorePending={creatorRestorePending}
         />
       </div>
 

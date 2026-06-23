@@ -18,6 +18,8 @@ export default function EditComponentPage({
   const authLoading = useAuthStore((s) => s.authLoading);
   const [initial, setInitial] = useState<UploadInitialValues | null>(null);
   const [notFound, setNotFound] = useState(false);
+  // Was the component approved before this edit? (Creator edit → re-review.)
+  const [wasApproved, setWasApproved] = useState(false);
 
   useEffect(() => {
     // Wait until auth resolves — otherwise the first render (profile still null,
@@ -33,7 +35,7 @@ export default function EditComponentPage({
         supabase
           .from("components")
           .select(
-            "preview_url, aspect_ratio, category, section, filters, colors, featured, uploaded_by, is_published",
+            "preview_url, aspect_ratio, category, section, filters, colors, featured, uploaded_by, is_published, status",
           )
           .eq("id", id)
           .single(),
@@ -45,13 +47,16 @@ export default function EditComponentPage({
         return;
       }
 
-      // Ownership guard: non-admins may only edit their own component, and only
-      // while it's unpublished. (RLS also blocks the write — defense in depth.)
+      // Ownership guard: non-admins may only edit their OWN component (any status
+      // — editing an approved one sends it back to pending for re-review). RLS
+      // also enforces this. Admins may edit anything.
       const owns = !!profile && data.uploaded_by === profile.id;
-      if (!isAdmin && (!owns || data.is_published)) {
+      if (!isAdmin && !owns) {
         router.replace("/");
         return;
       }
+      // A creator editing a previously-approved design → flag it as a re-upload.
+      setWasApproved(data.status === "approved");
 
       setInitial({
         previewUrl: data.preview_url,
@@ -85,8 +90,15 @@ export default function EditComponentPage({
       ) : initial ? (
         <UploadForm
           componentId={id}
+          ownerMode={!isAdmin}
+          wasApproved={wasApproved}
           heading="Edit Component"
-          subheading="Update assets, Figma data, and color weights."
+          subheading={
+            isAdmin
+              ? "Update assets, Figma data, and color weights."
+              : "Editing sends this design back to review — it stays hidden until an admin re-approves."
+          }
+          submitLabel={isAdmin ? undefined : "Submit for Review"}
           initialValues={initial}
           onSuccess={() => router.push("/")}
         />

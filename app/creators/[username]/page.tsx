@@ -14,15 +14,19 @@ import {
   ArrowUp,
   ArrowUpDown,
   Check,
+  ExternalLink,
   Eye,
   EyeOff,
+  Globe,
   Pencil,
   Plus,
   Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { revalidateSidebarCounts } from "@/app/actions";
 import { useAuthStore } from "@/store/authStore";
 import { cloudflareThumb, cloudflareLogo } from "@/lib/utils";
+import { XIcon, InstagramIcon, LinkedinIcon } from "@/components/social-icons";
 import { todayIST } from "@/lib/ist";
 import AccountModal from "@/app/components/AccountModal";
 import CreatorProgramModal from "@/app/components/CreatorProgramModal";
@@ -35,6 +39,11 @@ type Creator = {
   username: string | null;
   bio: string | null;
   created_at: string;
+  x_handle?: string | null;
+  instagram_handle?: string | null;
+  linkedin_handle?: string | null;
+  website_url?: string | null;
+  cta_url?: string | null;
 };
 
 type Design = {
@@ -65,33 +74,6 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: "public", label: "Public View" },
 ];
 
-// Render bio with `word(https://link)` syntax: only the word shows, as a black
-// clickable link that opens in a new tab. Plain text otherwise (no logo/image).
-const BIO_LINK = /(\S+)\((https?:\/\/[^\s)]+)\)/g;
-function renderWithLinks(text: string) {
-  const out: React.ReactNode[] = [];
-  let last = 0;
-  let m: RegExpExecArray | null;
-  BIO_LINK.lastIndex = 0;
-  while ((m = BIO_LINK.exec(text)) !== null) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    out.push(
-      <a
-        key={m.index}
-        href={m[2]}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-black underline underline-offset-2 hover:opacity-70"
-      >
-        {m[1]}
-      </a>,
-    );
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
-
 // Tab label <-> public.components.category (DB value).
 const TABS = [
   { db: "Website", label: "Websites" },
@@ -114,7 +96,7 @@ const PAGE = 24;
 // Portal cache (localStorage) — keyed by username + viewer id (the design set
 // differs for the owner/admin vs a visitor). Lets a revisit paint instantly
 // while a fresh copy is refetched in the background.
-const PORTAL_CACHE_KEY = "creator_portal_v1";
+const PORTAL_CACHE_KEY = "creator_portal_v2";
 const PORTAL_TTL = 5 * 60 * 1000;
 
 type PortalEntry = { ts: number; creator: Creator; designs: Design[] };
@@ -219,6 +201,16 @@ export default function CreatorPage() {
     setDesigns((data as Design[] | null) ?? []);
   }, [username]);
 
+  // Re-pull just the creator profile (e.g. after the owner edits socials/bio in
+  // the account modal) so the header + social links update without a reload.
+  const refetchCreator = useCallback(async () => {
+    const { data } = await createClient().rpc("get_creator", {
+      uname: username,
+    });
+    const c = (data as Creator | null) ?? null;
+    if (c) setCreator(c);
+  }, [username]);
+
   // Load the real creator (public get_creator RPC) + their designs. Cache-first:
   // a fresh (<5 min) cached portal paints instantly, then a background refetch
   // updates it. Re-runs when the viewer's identity resolves so owner/admin get
@@ -254,6 +246,11 @@ export default function CreatorPage() {
           username: profile.username,
           bio: profile.bio ?? null,
           created_at: profile.created_at,
+          x_handle: profile.x_handle ?? null,
+          instagram_handle: profile.instagram_handle ?? null,
+          linkedin_handle: profile.linkedin_handle ?? null,
+          website_url: profile.website_url ?? null,
+          cta_url: profile.cta_url ?? null,
         };
       }
       const rows = (designRows as Design[] | null) ?? [];
@@ -334,6 +331,10 @@ export default function CreatorPage() {
     });
     if ((error || !data) && removed) {
       setDesigns((d) => [removed, ...d]); // revert
+    } else {
+      // Deleting a published design changes the global gallery counts — mark the
+      // server-cached sidebar counts stale so the home page shows fresh numbers.
+      revalidateSidebarCounts().catch(() => {});
     }
   };
 
@@ -353,6 +354,10 @@ export default function CreatorPage() {
       setDesigns((d) =>
         d.map((x) => (x.id === id ? { ...x, is_private: !nextPrivate } : x)),
       );
+    } else {
+      // Privacy change adds/removes the design from the public gallery → refresh
+      // the server-cached sidebar counts.
+      revalidateSidebarCounts().catch(() => {});
     }
   };
 
@@ -390,8 +395,20 @@ export default function CreatorPage() {
     setShowCreatorProgram(true);
   };
 
+  // Which designs a given sort/view includes. "Private blocks" = the creator's
+  // private ones; "Public View" = exactly what a visitor sees (approved, public,
+  // published); every other sort shows all.
+  const matchesView = (d: Design) =>
+    sortBy === "private"
+      ? d.is_private
+      : sortBy === "public"
+        ? d.status === "approved" && !d.is_private && d.is_published
+        : true;
+
+  // Tab badge counts respect the active view, so Public View shows only the
+  // publicly-visible count per category.
   const tabCount = (db: string) =>
-    designs.filter((d) => d.category === db).length;
+    designs.filter((d) => d.category === db && matchesView(d)).length;
 
   // Show every category tab, even empty ones (each shows its 0 count and an
   // empty state when selected).
@@ -428,15 +445,7 @@ export default function CreatorPage() {
 
   const visible = designs
     .filter((d) => d.category === activeTab)
-    // "Private blocks" = the creator's private ones. "Public View" = exactly
-    // what a visitor sees: approved, public, published. The rest show all.
-    .filter((d) =>
-      sortBy === "private"
-        ? d.is_private
-        : sortBy === "public"
-          ? d.status === "approved" && !d.is_private && d.is_published
-          : true,
-    )
+    .filter(matchesView)
     .sort((a, b) => {
       // The creator's manual order leads — pinned blocks first (newest pin on
       // top), mirroring how the home gallery shows this creator. Applies to the
@@ -558,8 +567,8 @@ export default function CreatorPage() {
               <button
                 type="button"
                 onClick={() => isOwner && setShowAccount(true)}
-                aria-label={isOwner ? "Open account" : undefined}
-                className={`size-[90px] shrink-0 overflow-hidden rounded-[20px] bg-[#ebebef] ${
+                aria-label={isOwner ? "Edit profile" : undefined}
+                className={`group relative size-[90px] shrink-0 overflow-hidden rounded-[20px] bg-[#ebebef] ${
                   isOwner ? "cursor-pointer" : "cursor-default"
                 }`}
               >
@@ -574,6 +583,12 @@ export default function CreatorPage() {
                 ) : (
                   <span className="flex size-full items-center justify-center text-[32px] font-medium text-[#09090b]">
                     {initial}
+                  </span>
+                )}
+                {/* Owner: edit overlay on hover. */}
+                {isOwner && (
+                  <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+                    <Pencil size={22} strokeWidth={1.75} />
                   </span>
                 )}
               </button>
@@ -612,9 +627,9 @@ export default function CreatorPage() {
                 </span>
               </div>
             ) : (
-              <p className="max-w-[520px] text-[16px] tracking-[-0.03em] text-black">
+              <p className="group max-w-[520px] whitespace-pre-wrap text-[16px] tracking-[-0.03em] text-black">
                 {creator.bio ? (
-                  renderWithLinks(creator.bio)
+                  creator.bio
                 ) : (
                   <span className="text-[#a1a1aa]">
                     {isOwner ? "Please add a bio" : "No bio added"}
@@ -628,12 +643,77 @@ export default function CreatorPage() {
                       setEditingBio(true);
                     }}
                     aria-label="Edit bio"
-                    className="ml-1.5 inline-flex translate-y-0.5 cursor-pointer text-[#71717b] transition-colors hover:text-[#09090b]"
+                    className="ml-1.5 inline-flex translate-y-0.5 cursor-pointer text-[#71717b] opacity-0 transition-opacity hover:text-[#09090b] focus-visible:opacity-100 group-hover:opacity-100"
                   >
                     <Pencil size={14} strokeWidth={1.5} />
                   </button>
                 )}
               </p>
+            )}
+
+            {/* Socials + custom CTA */}
+            {(creator.website_url ||
+              creator.x_handle ||
+              creator.instagram_handle ||
+              creator.linkedin_handle ||
+              creator.cta_url) && (
+              <div className="flex flex-wrap items-center gap-2">
+                {creator.website_url && (
+                  <a
+                    href={creator.website_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Website"
+                    className="flex size-9 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
+                  >
+                    <Globe size={17} strokeWidth={1.5} />
+                  </a>
+                )}
+                {creator.x_handle && (
+                  <a
+                    href={`https://x.com/${creator.x_handle}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="X"
+                    className="flex size-9 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
+                  >
+                    <XIcon size={15} />
+                  </a>
+                )}
+                {creator.instagram_handle && (
+                  <a
+                    href={`https://instagram.com/${creator.instagram_handle}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Instagram"
+                    className="flex size-9 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
+                  >
+                    <InstagramIcon size={16} />
+                  </a>
+                )}
+                {creator.linkedin_handle && (
+                  <a
+                    href={`https://linkedin.com/in/${creator.linkedin_handle}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="LinkedIn"
+                    className="flex size-9 items-center justify-center rounded-full border border-[#e7e9ee] text-[#52525b] transition-colors hover:bg-[#fafafa] hover:text-black"
+                  >
+                    <LinkedinIcon size={16} />
+                  </a>
+                )}
+                {creator.cta_url && (
+                  <a
+                    href={creator.cta_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 rounded-full bg-[#09090b] px-4 py-1.5 text-[13px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#27272a]"
+                  >
+                    Hire Creator
+                    <ExternalLink size={14} strokeWidth={1.5} />
+                  </a>
+                )}
+              </div>
             )}
           </div>
 
@@ -643,7 +723,7 @@ export default function CreatorPage() {
               <button
                 type="button"
                 onClick={() => router.push("/upload")}
-                className="flex cursor-pointer items-center gap-1 rounded-[10px] bg-[#2974ff] px-3 py-2 text-[14px] tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6]"
+                className="flex cursor-pointer items-center gap-1 rounded-[10px] bg-[#f5f5f5] px-3 py-2 text-[14px] tracking-[-0.03em] text-black transition-colors hover:bg-[#ececec]"
               >
                 <Plus size={16} strokeWidth={1.5} />
                 <span className="px-1">Publish New Design</span>
@@ -759,7 +839,7 @@ export default function CreatorPage() {
               </p>
               <p className="text-[14px] tracking-[-0.03em] text-[#a1a1aa]">
                 {sortBy === "public"
-                  ? "Once your designs are approved and public, they'll appear here — exactly as visitors see them."
+                  ? "Once your designs are approved and public, they'll appear here exactly as visitors see them."
                   : isOwner
                     ? "Publish a design in this category and it will appear here."
                     : "This creator hasn't published any designs yet."}
@@ -972,7 +1052,11 @@ export default function CreatorPage() {
 
       <AccountModal
         open={showAccount}
-        onClose={() => setShowAccount(false)}
+        onClose={() => {
+          setShowAccount(false);
+          // Pick up any bio/socials/CTA the owner just edited.
+          refetchCreator();
+        }}
         onLogout={logout}
         used={used}
         onBecomeCreator={becomeCreator}

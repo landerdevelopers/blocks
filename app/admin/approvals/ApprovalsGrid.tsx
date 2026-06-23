@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Calendar, Check, Clock, X } from "lucide-react";
 import { cloudflareThumb, cloudflareLogo } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 import { Textarea } from "@/components/ui/textarea";
 
 export type PendingItem = {
@@ -20,9 +21,9 @@ export type PendingItem = {
   creatorName: string;
   creatorAvatar: string | null;
   creatorUsername: string | null;
-  // Figma clipboard HTML — admin-only (this route is admin-gated). Powers the
-  // "Copy to Figma" button so a reviewer can paste the actual block into Figma.
-  figmaData: string | null;
+  // True when this is a creator's edit of a previously-approved design (now back
+  // in review) — shows a "Reuploaded" tag.
+  reuploaded: boolean;
 };
 
 function fmtDate(iso: string): string {
@@ -61,14 +62,22 @@ function Card({
     "flex items-center justify-center whitespace-nowrap border font-medium tracking-[-0.03em] shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,transform] duration-300 ease-out";
 
   // Write the Figma clipboard HTML so the reviewer can paste the real block into
-  // Figma. Admin-only route, so figma_data is available client-side here.
+  // Figma. figma_data isn't in the list query (it's the table's largest column)
+  // — fetch it on demand via the admin-only get_component_figma_data RPC. The
+  // fetch is handed to ClipboardItem as a promise so the clipboard write stays
+  // inside the user gesture (Safari/Firefox block a write after an await).
   const copyToFigma = async () => {
-    if (!item.figmaData || copyLock.current) return;
+    if (copyLock.current) return;
     copyLock.current = true;
+    const resolved = createClient()
+      .rpc("get_component_figma_data", { component_id: item.id })
+      .then(({ data }) => (data as string | null) ?? "");
     try {
       await navigator.clipboard.write([
         new ClipboardItem({
-          "text/html": new Blob([item.figmaData], { type: "text/html" }),
+          "text/html": resolved.then(
+            (fd) => new Blob([fd], { type: "text/html" }),
+          ),
         }),
       ]);
       setCopied(true);
@@ -116,8 +125,9 @@ function Card({
             )}
           </div>
         )}
-        {item.figmaData && (
-          <>
+        {/* Copy-to-Figma overlay — always shown (every pending item is a creator
+            upload, so figma_data always exists; it's fetched on click). */}
+        <>
             {/* Hover gradient behind the button. */}
             <span className="pointer-events-none absolute inset-x-0 bottom-0 z-5 h-24 bg-linear-to-t from-black/70 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
             {/* Copy button — hidden below the image (clipped by the wrapper's
@@ -189,8 +199,7 @@ function Card({
                 </div>
               </div>
             </div>
-          </>
-        )}
+        </>
       </div>
 
       <div className="flex flex-col gap-3">
@@ -315,17 +324,25 @@ function Card({
             </div>
           )}
 
-          {/* Date + time */}
-          <div className="flex items-center gap-1.5 py-1.5 text-[14px] tracking-[-0.03em] text-[#71717b]">
-            <span className="flex items-center gap-1">
-              <Calendar size={14} strokeWidth={1.5} />
-              {fmtDate(item.created_at)}
-            </span>
-            <span className="size-1 rounded-full bg-[#d4d4d8]" />
-            <span className="flex items-center gap-1">
-              <Clock size={14} strokeWidth={1.5} />
-              {fmtTime(item.created_at)}
-            </span>
+          {/* Date + time — with a "Reuploaded" tag pinned bottom-right when this
+              is a creator's edit of a previously-approved design. */}
+          <div className="flex items-center justify-between gap-1.5 py-1.5 text-[14px] tracking-[-0.03em] text-[#71717b]">
+            <div className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1">
+                <Calendar size={14} strokeWidth={1.5} />
+                {fmtDate(item.created_at)}
+              </span>
+              <span className="size-1 rounded-full bg-[#d4d4d8]" />
+              <span className="flex items-center gap-1">
+                <Clock size={14} strokeWidth={1.5} />
+                {fmtTime(item.created_at)}
+              </span>
+            </div>
+            {item.reuploaded && (
+              <span className="shrink-0 rounded-full bg-[#fff0d6] px-2.5 py-1 text-[12px] font-medium tracking-[-0.03em] text-[#ca8000]">
+                Reuploaded
+              </span>
+            )}
           </div>
         </div>
       </div>
