@@ -1005,8 +1005,16 @@ export default function Gallery({
           className="shrink-0 text-[#4D4D4D]"
         />
         <span className="truncate text-[14px] tracking-[-0.03em] text-[#4D4D4D]">
-          We&apos;re constantly adding new designs, so come back often to explore
-          fresh resources 😉
+          Now you can upload your designs to Blocks, get discovered by designers,
+          and gain more exposure.{" "}
+          <a
+            href="/creator-rules"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 ml-1 transition-colors hover:text-black"
+          >
+            Apply here
+          </a>
         </span>
       </div>
     </div>

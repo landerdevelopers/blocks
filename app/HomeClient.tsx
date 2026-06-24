@@ -330,7 +330,7 @@ function HomeInner({
       openLogin(false);
       return;
     }
-    router.push("/creator-rules");
+    window.open("/creator-rules", "_blank", "noopener,noreferrer");
   };
 
   // Seed `used` from the DB so the count survives refreshes. If the profile's

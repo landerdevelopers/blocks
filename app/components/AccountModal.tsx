@@ -242,6 +242,8 @@ export default function AccountModal({
           <Link
             href={profile?.username ? `/creators/${profile.username}` : "#"}
             prefetch
+            target="_blank"
+            rel="noopener noreferrer"
             onClick={onClose}
             className="flex min-h-[36px] w-full cursor-pointer items-center justify-center gap-2 rounded-[10px] bg-[#f5f5f5] px-4 py-2 text-[14px] tracking-[-0.03em] text-[#171717] transition-colors hover:bg-[#ececec]"
           >
@@ -275,6 +277,8 @@ export default function AccountModal({
         <Link
           href="/usage-license"
           prefetch
+          target="_blank"
+          rel="noopener noreferrer"
           onClick={onClose}
           className="flex w-fit items-center gap-1.5 text-[15px] tracking-[-0.03em] text-[#2974ff] underline underline-offset-2 transition-opacity hover:opacity-80"
         >

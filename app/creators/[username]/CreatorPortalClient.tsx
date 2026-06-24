@@ -376,7 +376,7 @@ export default function CreatorPortalClient({
 
   const becomeCreator = () => {
     setShowAccount(false);
-    router.push("/creator-rules");
+    window.open("/creator-rules", "_blank", "noopener,noreferrer");
   };
 
   // Which designs a given sort/view includes. "Private blocks" = the creator's

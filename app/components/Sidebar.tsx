@@ -747,6 +747,8 @@ export default function Sidebar({
                         <Link
                           href={`/creators/${myUsername}`}
                           prefetch
+                          target="_blank"
+                          rel="noopener noreferrer"
                           onClick={() => setCreatorsOpen(false)}
                           className="flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-[#ebebeb] bg-white px-2.5 py-1.5 shadow-[0px_1px_1px_rgba(10,13,20,0.03)] transition-colors hover:bg-[#fafafa]"
                         >
