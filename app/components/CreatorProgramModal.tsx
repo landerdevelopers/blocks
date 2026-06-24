@@ -26,8 +26,8 @@ export default function CreatorProgramModal({
 }: {
   open: boolean;
   onClose: () => void;
-  // Called after a successful submission. When provided, the modal skips its
-  // built-in success view and hands control back (e.g. to redirect).
+  // Called when the success view is dismissed (Continue Exploring / backdrop),
+  // e.g. to redirect home. The success popup is always shown first.
   onApplied?: () => void;
 }) {
   const profile = useAuthStore((s) => s.profile);
@@ -46,6 +46,14 @@ export default function CreatorProgramModal({
   const close = () => {
     setSubmitted(false);
     onClose();
+  };
+
+  // Dismiss the success popup — hand back to the caller (e.g. redirect home) if
+  // it wants to take over, else just close.
+  const finishSuccess = () => {
+    setSubmitted(false);
+    if (onApplied) onApplied();
+    else onClose();
   };
 
   useEffect(() => {
@@ -100,12 +108,8 @@ export default function CreatorProgramModal({
     setRole("");
     setSocial("");
     setReason("");
-    // Hand back to the caller (e.g. redirect) if it wants to take over; else
-    // fall back to the built-in success view.
-    if (onApplied) {
-      onApplied();
-      return;
-    }
+    // Always show the success popup; the caller's onApplied (e.g. redirect) runs
+    // only once the user dismisses it.
     setSubmitted(true);
   };
 
@@ -115,7 +119,7 @@ export default function CreatorProgramModal({
   if (submitted) {
     return createPortal(
       <div
-        onClick={close}
+        onClick={finishSuccess}
         className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
       >
         <div
@@ -136,7 +140,7 @@ export default function CreatorProgramModal({
           </div>
           <button
             type="button"
-            onClick={close}
+            onClick={finishSuccess}
             className="mt-2 w-full cursor-pointer rounded-[8px] bg-[#2974ff] px-3 py-2 text-[14px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6]"
           >
             Continue Exploring
