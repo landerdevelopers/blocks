@@ -263,13 +263,24 @@ export default function AccountModal({
                 <ExternalLink size={18} strokeWidth={1.5} />
                 Become Creator
               </button>
-              <p className="text-[14px] text-[#1c9a00]">
+              <p className="text-[14px] text-black">
                 Publish your own designs, earn creator perks, and unlock up to 50
                 daily copies.
               </p>
             </div>
           )
         )}
+
+        {/* Usage License — opens the license page. */}
+        <Link
+          href="/usage-license"
+          prefetch
+          onClick={onClose}
+          className="flex w-fit items-center gap-1.5 text-[15px] tracking-[-0.03em] text-[#2974ff] underline underline-offset-2 transition-opacity hover:opacity-80"
+        >
+          Usage License
+          <ExternalLink size={15} strokeWidth={1.75} />
+        </Link>
       </ScrollFadeEffect>
       </div>
     </div>,

@@ -313,6 +313,14 @@ export default function UploadForm({
   const [figmaCopied, setFigmaCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // macOS-only paste advisory: on Mac, trackpad/right-click paste often fails to
+  // reach the Figma paste box — only a keyboard ⌘V does. Detected client-side so
+  // SSR markup matches (starts false, flips after mount).
+  const [isMac, setIsMac] = useState(false);
+  useEffect(() => {
+    const p = `${navigator.platform} ${navigator.userAgent}`;
+    setIsMac(/Mac|iPhone|iPad|iPod/i.test(p));
+  }, []);
   const inputRef = useRef<HTMLInputElement>(null);
   // Focusable target that captures the Figma paste (see pasteFigmaSection).
   const pasteBoxRef = useRef<HTMLDivElement>(null);
@@ -582,7 +590,8 @@ export default function UploadForm({
   };
 
   return (
-    <div className="w-full max-w-[628px] rounded-2xl border border-[#e7e9ee] bg-[#f9fafa] p-6 shadow-[0px_1px_2px_rgba(0,0,0,0.04)]">
+    <div className="relative w-full max-w-[628px]">
+    <div className="w-full rounded-2xl border border-[#e7e9ee] bg-[#f9fafa] p-6 shadow-[0px_1px_2px_rgba(0,0,0,0.04)]">
       {/* Header */}
       <div className="flex flex-col gap-1">
         <h1 className="text-lg font-semibold tracking-[-0.03em] text-[#09090b]">
@@ -887,6 +896,31 @@ export default function UploadForm({
       >
         {saving ? "Saving…" : isEdit ? "Save Changes" : submitLabel}
       </button>
+    </div>
+
+      {/* macOS-only paste advisory — sits to the right of the upload card.
+          Trackpad/right-click paste frequently fails to reach the Figma paste
+          box on macOS; only a keyboard ⌘V is reliable. */}
+      {isMac && (
+        <aside className="absolute left-full top-0 ml-5 hidden w-[300px] xl:block">
+          <div className="flex flex-col gap-2 rounded-2xl border border-[#e7e9ee] bg-white p-5 shadow-[0px_1px_2px_rgba(0,0,0,0.04)]">
+            <div className="flex items-center gap-2">
+              <TriangleAlert size={16} strokeWidth={2} className="shrink-0 text-[#f5b73d]" />
+              <h2 className="text-sm font-semibold tracking-[-0.03em] text-[#09090b]">
+                Using a Mac?
+              </h2>
+            </div>
+            <p className="text-[13px] leading-5 tracking-[-0.03em] text-[#71717b]">
+              Pasting with the trackpad or right-click may not register here. Copy
+              your Figma frame with
+              <span className="font-medium text-[#09090b]"> ⌘C</span>, then click on the paste figma section and paste it
+              into the box using
+              <span className="font-medium text-[#09090b]"> ⌘V</span> on your
+              keyboard.
+            </p>
+          </div>
+        </aside>
+      )}
     </div>
   );
 }

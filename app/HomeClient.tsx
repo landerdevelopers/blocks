@@ -191,6 +191,9 @@ function HomeInner({
   // Apply the active category + section/theme filters to a component, mirroring
   // the normal gallery's filtering so color results stay in the chosen context.
   const matchesActiveFilters = (c: GalleryComponent): boolean => {
+    // Scope to the selected creator (null = all creators → show everyone's),
+    // mirroring the normal gallery's uploaded_by filter.
+    if (creatorId && c.uploaded_by !== creatorId) return false;
     const dbCat = CAT_MAP[activeCategory ?? "website"];
     if (c.category !== dbCat) return false;
     if (!activeFilters.length) return true;
@@ -213,7 +216,7 @@ function HomeInner({
     () =>
       colorSearchActive ? colorSearchAll.filter(matchesActiveFilters) : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [colorSearchActive, colorSearchAll, activeCategory, activeFilters],
+    [colorSearchActive, colorSearchAll, activeCategory, activeFilters, creatorId],
   );
 
   // Displayed slice — grows by COLOR_PAGE_SIZE as the user scrolls.

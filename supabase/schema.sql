@@ -2006,9 +2006,13 @@ revoke execute on function public.get_application_stats(date, date)
 -- per SEARCH color: very dark/light → lightness ±15; gray → lightness ±20; else
 -- hue family (±30° circular, sat ±55, light ±40) — mirrors the old client logic.
 -- Score = sum of best matched pct per search color (a row hitting both ranks
--- highest). Returns ONLY grant-safe columns (NO figma_data, NO colors_hsl),
--- top 300 by score. Replaces pulling the whole catalog to the client.
+-- highest). Returns ONLY grant-safe columns (NO figma_data, NO colors_hsl) plus
+-- uploaded_by so the client can scope results to one creator's portal, top 300
+-- by score. Replaces pulling the whole catalog to the client.
 -- ---------------------------------------------------------------------------
+-- Return columns changed (added uploaded_by, so the creator portal can scope
+-- color results to one creator) → drop before recreate.
+drop function if exists public.search_by_color(text[]);
 create or replace function public.search_by_color(search_hexes text[])
 returns table (
   id           uuid,
@@ -2017,7 +2021,8 @@ returns table (
   filters      text[],
   preview_url  text,
   aspect_ratio numeric,
-  colors       jsonb
+  colors       jsonb,
+  uploaded_by  uuid
 )
 language sql
 stable
@@ -2067,7 +2072,7 @@ as $$
   scored as (
     select id, sum(pct) as score from matches group by id
   )
-  select c.id, c.category, c.section, c.filters, c.preview_url, c.aspect_ratio, c.colors
+  select c.id, c.category, c.section, c.filters, c.preview_url, c.aspect_ratio, c.colors, c.uploaded_by
   from scored s
   join public.components c on c.id = s.id
   order by s.score desc nulls last
