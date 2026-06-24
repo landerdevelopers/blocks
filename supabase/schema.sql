@@ -250,14 +250,14 @@ alter table public.profiles add column if not exists cta_url          text;
 -- re-grant does NOT remove it), so the column-scoped grants are the only ones.
 grant select on public.profiles to authenticated;
 revoke insert, update on public.profiles from authenticated;
-grant insert (id, full_name, avatar_url, bio, username, creator_onboarded, beta)
+grant insert (id, full_name, avatar_url, bio, username, creator_onboarded)
   on public.profiles to authenticated;
 -- `id` is included so PostgREST upserts work (ON CONFLICT DO UPDATE sets every
 -- payload column, including the PK). It's safe: the "update own" RLS with-check
 -- (auth.uid() = id) forbids changing id to anyone else's — it can only ever be
 -- set back to the user's own id. `role`, `copies_today`, `last_copy_date` stay
 -- OUT (the whole point) so privilege escalation / limit-reset remain blocked.
-grant update (id, full_name, avatar_url, bio, username, creator_onboarded, beta)
+grant update (id, full_name, avatar_url, bio, username, creator_onboarded)
   on public.profiles to authenticated;
 
 -- components: everyone may read (published-only via RLS); writes are admin-only
