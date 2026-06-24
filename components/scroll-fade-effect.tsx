@@ -10,9 +10,10 @@ const FADE = 32; // px — fade height at each scrollable edge
 // solid color. Adapted from @ncdai/scroll-fade-effect to project conventions.
 function ScrollFadeEffect({
   className = "",
+  showScrollbar = false,
   children,
   ...props
-}: React.ComponentProps<"div">) {
+}: React.ComponentProps<"div"> & { showScrollbar?: boolean }) {
   const ref = React.useRef<HTMLDivElement>(null);
   const [mask, setMask] = React.useState("none");
 
@@ -47,7 +48,12 @@ function ScrollFadeEffect({
       ref={ref}
       data-slot="scroll-fade-effect"
       onScroll={update}
-      className={`overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${className}`}
+      className={`overflow-y-auto ${
+        showScrollbar
+          ? // Thin scrollbar that only appears while the content overflows.
+            "[scrollbar-width:thin] [scrollbar-color:#d4d4d8_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#d4d4d8] [&::-webkit-scrollbar-track]:bg-transparent"
+          : "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      } ${className}`}
       style={{ maskImage: mask, WebkitMaskImage: mask }}
       {...props}
     >

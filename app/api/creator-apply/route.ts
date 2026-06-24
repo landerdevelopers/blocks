@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getMailer, CREATOR_APPLICATION_NOTIFY, escapeHtml } from "@/lib/email";
 
 // Re-validate https on the server (matches isHttps below).
 function isHttps(s: string): boolean {
@@ -71,6 +72,59 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  // Notify the team — best-effort and DECOUPLED from the response. `after`
+  // runs this once the success response has already been sent (on Vercel it's
+  // kept alive via waitUntil), so a slow or failing email can never block the
+  // applicant or undo the saved application.
+  after(async () => {
+    const mailer = getMailer();
+    if (!mailer) return;
+    try {
+      // Resolve the applicant's display name (email comes from the session).
+      const { data: prof } = await admin
+        .from("profiles")
+        .select("full_name")
+        .eq("id", user.id)
+        .single();
+      const name = prof?.full_name?.trim() || "—";
+      const email = user.email || "—";
+      const submittedAt = new Date().toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
+
+      const row = (label: string, value: string) => `
+        <tr>
+          <td style="padding:8px 12px;font-size:13px;color:#71717a;white-space:nowrap;vertical-align:top">${label}</td>
+          <td style="padding:8px 12px;font-size:14px;color:#09090b">${value}</td>
+        </tr>`;
+
+      await mailer.resend.emails.send({
+        from: mailer.from,
+        to: CREATOR_APPLICATION_NOTIFY,
+        subject: `New Creator Application — ${escapeHtml(name)}`,
+        html: `
+          <div style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#09090b;line-height:1.6;max-width:560px;margin:0 auto;padding:32px 24px">
+            <h1 style="font-size:20px;font-weight:600;letter-spacing:-0.02em;margin:0 0 4px">New Creator Application</h1>
+            <p style="font-size:14px;color:#71717a;margin:0 0 20px">A new applicant just submitted the Creator Program form.</p>
+            <table style="width:100%;border-collapse:collapse;border:1px solid #e4e4e7;border-radius:10px;overflow:hidden">
+              ${row("Name", escapeHtml(name))}
+              ${row("Email", escapeHtml(email))}
+              ${row("Role", escapeHtml(role))}
+              ${row("Social", `<a href="${escapeHtml(social)}" style="color:#2974ff;text-decoration:none">${escapeHtml(social)}</a>`)}
+              ${row("Reason", reason ? escapeHtml(reason).replace(/\n/g, "<br/>") : "—")}
+              ${row("Submitted", `${escapeHtml(submittedAt)} IST`)}
+            </table>
+          </div>
+        `,
+      });
+    } catch {
+      // Swallow — the application is already saved; this notification is
+      // non-critical and must not surface as a request error.
+    }
+  });
 
   return NextResponse.json({ ok: true });
 }

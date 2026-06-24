@@ -42,6 +42,28 @@ function addDays(ymd: string, delta: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
+// UTC instant for 00:00 IST on the given IST calendar day — the lower bound for
+// a lander_clicks created_at range. (lander_clicks has no `date` column, so the
+// windowing is done over created_at, unlike the copy/login RPC windows.)
+function istDayStartISO(ymd: string): string {
+  return new Date(`${ymd}T00:00:00+05:30`).toISOString();
+}
+
+// Count lander_clicks whose created_at falls in [fromYmd 00:00 IST, toExcl 00:00
+// IST). Pass null bounds for the all-time total. Uses a head/count query so no
+// rows are pulled to JS.
+async function countLander(
+  admin: ReturnType<typeof createAdminClient>,
+  fromYmd: string | null,
+  toExcl: string | null,
+): Promise<number> {
+  let q = admin.from("lander_clicks").select("*", { count: "exact", head: true });
+  if (fromYmd) q = q.gte("created_at", istDayStartISO(fromYmd));
+  if (toExcl) q = q.lt("created_at", istDayStartISO(toExcl));
+  const { count } = await q;
+  return count ?? 0;
+}
+
 type RawPerUser = {
   uid: string;
   count: number;
@@ -85,7 +107,8 @@ function toStats(w: RawWindow | null | undefined): Stats {
 const getCachedOverview = unstable_cache(
   async (today: string, start7: string) => {
     const admin = createAdminClient();
-    const [windowsRes, top10Res, landerRes] = await Promise.all([
+    const tomorrow = addDays(today, 1); // exclusive upper bound (00:00 IST next day)
+    const [windowsRes, top10Res, lToday, l7d, lAll] = await Promise.all([
       admin.rpc("get_analytics_windows", {
         d_today: today,
         d_start7: start7,
@@ -95,7 +118,10 @@ const getCachedOverview = unstable_cache(
         .select("id, category, copy_count, preview_url")
         .order("copy_count", { ascending: false })
         .limit(10),
-      admin.from("lander_clicks").select("*", { count: "exact", head: true }),
+      // Lander visits windowed like the other metrics: today / last-7-days / all.
+      countLander(admin, today, tomorrow),
+      countLander(admin, start7, tomorrow),
+      countLander(admin, null, null),
     ]);
     const w = (windowsRes.data ?? {}) as Record<string, RawWindow | null>;
     const topComponents: TopComponent[] = (top10Res.data ?? []).map((c) => ({
@@ -111,12 +137,12 @@ const getCachedOverview = unstable_cache(
         all: toStats(w.all),
       },
       topComponents,
-      landerClicks: landerRes.count ?? 0,
+      landerVisits: { today: lToday, "7d": l7d, all: lAll },
     };
   },
   // Bump the version suffix whenever the cached shape changes (e.g. dau added) so
   // stale entries from a prior deploy don't surface fields the new code expects.
-  ["analytics-overview-v2"],
+  ["analytics-overview-v3"],
   // Tagged so the in-page Refresh button can bust it on demand (revalidateTag).
   // The 5-min window is just a safety net behind that manual refresh; the cache
   // key already includes `today`, so it rolls over on its own at the IST date
@@ -155,7 +181,7 @@ async function loadAnalytics(
 
   // First wave: cached tab overview + (live) date-window stats + per-user rows.
   // The date view is uncached since it's an arbitrary, rarely repeated param.
-  const [overview, dateRes, rawToday, rawDate] = await Promise.all([
+  const [overview, dateRes, rawToday, rawDate, landerDate] = await Promise.all([
     getCachedOverview(today, start7),
     datePick
       ? admin.rpc("get_analytics_windows", {
@@ -166,6 +192,8 @@ async function loadAnalytics(
       : Promise.resolve(null),
     perUserFor(today),
     datePick ? perUserFor(datePick) : Promise.resolve(null),
+    // Lander visits for the picked day (live, like the rest of the date view).
+    datePick ? countLander(admin, datePick, addDays(datePick, 1)) : Promise.resolve(null),
   ]);
 
   const statDate = dateRes
@@ -230,7 +258,12 @@ async function loadAnalytics(
       date: statDate,
     },
     topComponents: overview.topComponents,
-    landerClicks: overview.landerClicks,
+    landerVisits: {
+      today: overview.landerVisits.today,
+      "7d": overview.landerVisits["7d"],
+      all: overview.landerVisits.all,
+      date: landerDate,
+    },
     perUser: { tabs: enrich(rawToday), date: rawDate ? enrich(rawDate) : null },
     categoryById,
   };

@@ -657,7 +657,7 @@ export default function Sidebar({
                     </div>
 
                     {/* List — max 4 rows visible, scroll the rest. Edge fade. */}
-                    <ScrollFadeEffect className="max-h-[192px]">
+                    <ScrollFadeEffect showScrollbar className="max-h-[192px]">
                         {/* All Creators — always on top; clears the selection.
                             Active (dark gray) when no creator is selected. */}
                         <button

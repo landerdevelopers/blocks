@@ -49,7 +49,8 @@ export type TopComponent = {
 export type AnalyticsData = {
   stats: { today: Stats; "7d": Stats; all: Stats; date: Stats | null };
   topComponents: TopComponent[];
-  landerClicks: number;
+  // Lander Studio visits windowed like the KPIs (date is null unless a day picked).
+  landerVisits: { today: number; "7d": number; all: number; date: number | null };
   perUser: { tabs: PerUserRow[]; date: PerUserRow[] | null };
   categoryById: Record<string, string>;
 };
@@ -204,12 +205,16 @@ function AnalyticsContent({
   today: string;
   initialDate: string | null;
 }) {
-  const { stats, topComponents, landerClicks, perUser, categoryById } =
+  const { stats, topComponents, landerVisits, perUser, categoryById } =
     use(dataPromise);
 
   const current: Stats =
     view === "date" ? (stats.date ?? stats.today) : stats[view];
   const activeDay = view === "date" ? (initialDate ?? today) : today;
+
+  // Lander visits follow the active window/date, same as the KPIs.
+  const landerNow =
+    view === "date" ? (landerVisits.date ?? landerVisits.today) : landerVisits[view];
   const perUserRows = view === "date" ? (perUser.date ?? []) : perUser.tabs;
 
   const kpis = [
@@ -244,12 +249,12 @@ function AnalyticsContent({
       {/* Lander visits + Copies by category, same row. */}
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]">
         {/* Lander Studio visits — black card. */}
-        <div className="flex flex-col justify-center gap-1 rounded-2xl bg-[#09090b] px-5 py-4 text-white">
+        <div className="flex flex-col justify-center gap-1 rounded-2xl bg-[#09090b] px-7 py-4 text-white lg:min-w-60">
           <span className="text-xs tracking-[-0.03em] text-white/55">
-            Lander Studio visits · all time
+            Lander Studio visits
           </span>
           <span className="text-[28px] font-semibold leading-none tracking-[-0.04em] tabular-nums">
-            {landerClicks.toLocaleString()}
+            {landerNow.toLocaleString()}
           </span>
         </div>
 
