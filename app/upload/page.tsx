@@ -1,17 +1,34 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import UploadForm from "@/components/UploadForm";
 import { useAuthStore } from "@/store/authStore";
 
+// useSearchParams() requires a Suspense boundary (Next 16) — wrap the page.
 export default function UploadPage() {
+  return (
+    <Suspense fallback={null}>
+      <UploadPageInner />
+    </Suspense>
+  );
+}
+
+function UploadPageInner() {
   const [uploaded, setUploaded] = useState(false);
   // Admins publish curated gallery content; everyone else here is a creator
   // (middleware only lets admins + creators in) → submit as a pending review.
   const isAdmin = useAuthStore((s) => s.isAdmin);
   const username = useAuthStore((s) => s.profile?.username);
   const ownerMode = !isAdmin;
+
+  // Admin arrived from a creator's portal ("Publish New Design") → attribute the
+  // upload to that creator. Ignored for non-admins (the param can't be trusted,
+  // and the admin INSERT policy is what actually permits a foreign uploaded_by).
+  const search = useSearchParams();
+  const onBehalfOfCreatorId = isAdmin ? search.get("creator") : null;
+  const onBehalfUsername = onBehalfOfCreatorId ? search.get("cu") : null;
 
   if (uploaded) {
     return (
@@ -60,11 +77,22 @@ export default function UploadPage() {
       <UploadForm
         key="upload"
         ownerMode={ownerMode}
-        heading={ownerMode ? "Publish New Design" : undefined}
+        onBehalfOfCreatorId={onBehalfOfCreatorId}
+        heading={
+          onBehalfOfCreatorId
+            ? onBehalfUsername
+              ? `Publish for @${onBehalfUsername}`
+              : "Publish for creator"
+            : ownerMode
+              ? "Publish New Design"
+              : undefined
+        }
         subheading={
-          ownerMode
-            ? "Submit your design for review. Approved designs go live."
-            : undefined
+          onBehalfOfCreatorId
+            ? "This design will be published to the creator's portal, attributed to them."
+            : ownerMode
+              ? "Submit your design for review. Approved designs go live."
+              : undefined
         }
         submitLabel={ownerMode ? "Submit for Review" : undefined}
         onSuccess={() => setUploaded(true)}

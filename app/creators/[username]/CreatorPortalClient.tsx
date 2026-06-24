@@ -715,7 +715,20 @@ export default function CreatorPortalClient({
             {isOwner ? (
               <button
                 type="button"
-                onClick={() => router.push("/upload")}
+                onClick={() => {
+                  // Admin publishing from ANOTHER creator's portal → attribute
+                  // the upload to that creator (it lands on their portal, not as
+                  // an admin upload). Own portal / non-admin owner → normal path.
+                  const onBehalf =
+                    profile?.role === "admin" && profile.id !== creator.id;
+                  router.push(
+                    onBehalf
+                      ? `/upload?creator=${creator.id}&cu=${encodeURIComponent(
+                          creator.username ?? "",
+                        )}`
+                      : "/upload",
+                  );
+                }}
                 className="flex cursor-pointer items-center gap-1 rounded-[10px] bg-[#f5f5f5] px-3 py-2 text-[14px] tracking-[-0.03em] text-black transition-colors hover:bg-[#ececec]"
               >
                 <Plus size={16} strokeWidth={1.5} />

@@ -255,6 +255,7 @@ export default function UploadForm({
   onSuccess,
   ownerMode = false,
   wasApproved = false,
+  onBehalfOfCreatorId = null,
 }: {
   initialValues?: UploadInitialValues;
   componentId?: string;
@@ -268,6 +269,11 @@ export default function UploadForm({
   // Creator editing a previously-APPROVED design — mark it reuploaded so the
   // approvals queue shows the "Reuploaded" tag.
   wasApproved?: boolean;
+  // Admin publishing on behalf of a creator (from that creator's portal): the
+  // inserted row is attributed to this creator id (uploaded_by) so it lands on
+  // their portal instead of showing as an admin upload. Admin-only; the admin
+  // INSERT policy permits any uploaded_by.
+  onBehalfOfCreatorId?: string | null;
 }) {
   const supabase = createClient();
   const profile = useAuthStore((s) => s.profile);
@@ -534,7 +540,9 @@ export default function UploadForm({
             .eq("id", componentId)
         : supabase.from("components").insert({
             ...payload,
-            uploaded_by: profile?.id ?? null,
+            // Admin-on-behalf → attribute to the target creator; otherwise the
+            // uploading user owns it.
+            uploaded_by: onBehalfOfCreatorId ?? profile?.id ?? null,
             // Creators submit for review (pending, unpublished); admins publish
             // an approved component straight to the live gallery.
             status: ownerMode ? "pending" : "approved",
@@ -580,6 +588,7 @@ export default function UploadForm({
           aspect_ratio: c.aspect_ratio,
           colors: c.colors,
           featured: (c.featured as boolean) ?? false,
+          uploaded_by: (c.uploaded_by as string | null) ?? null,
         } as GalleryComponent);
       }
       onSuccess?.(data as SavedComponent);
