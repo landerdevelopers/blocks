@@ -3,8 +3,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import CreatorAccessButton from "./CreatorAccessButton";
 import AdminBackLink from "../AdminBackLink";
 
-// Admin-only (gated by middleware). Lists every approved creator (a user with
-// an approved Creator Program application) and their design counts by status.
+// Admin-only (gated by middleware). Lists every creator and their design counts
+// by status — both approved Creator Program applicants AND users granted the
+// creator role directly from the backend (no application on file).
 export const dynamic = "force-dynamic";
 
 type ProfileRow = {
@@ -22,17 +23,26 @@ const card =
 export default async function AdminCreatorsPage() {
   const admin = createAdminClient();
 
-  // Approved creators = distinct users with an approved application.
-  const { data: approved } = await admin
-    .from("creator_applications")
-    .select("user_id, created_at")
-    .eq("status", "approved")
-    .order("created_at", { ascending: false });
+  // Two sources, unioned: (1) users with an approved application, and (2) users
+  // granted the creator role directly in the backend (no application). Run both
+  // reads in parallel.
+  const [approvedRes, creatorRoleRes] = await Promise.all([
+    admin
+      .from("creator_applications")
+      .select("user_id, created_at")
+      .eq("status", "approved")
+      .order("created_at", { ascending: false }),
+    admin.from("profiles").select("id").eq("role", "creator"),
+  ]);
 
-  // Distinct user ids, newest-approval first.
+  // Distinct user ids: approved applicants first (newest-approval first), then
+  // any role='creator' profile not already covered by an application.
   const uids: string[] = [];
-  for (const a of (approved as { user_id: string }[]) ?? []) {
+  for (const a of (approvedRes.data as { user_id: string }[]) ?? []) {
     if (!uids.includes(a.user_id)) uids.push(a.user_id);
+  }
+  for (const p of (creatorRoleRes.data as { id: string }[]) ?? []) {
+    if (!uids.includes(p.id)) uids.push(p.id);
   }
 
   const profileMap = new Map<string, ProfileRow & { email: string | null }>();
@@ -145,7 +155,7 @@ export default async function AdminCreatorsPage() {
               Creators
             </h1>
             <p className="text-sm tracking-[-0.03em] text-[#71717b]">
-              {rows.length.toLocaleString()} approved creator
+              {rows.length.toLocaleString()} creator
               {rows.length === 1 ? "" : "s"}
             </p>
           </div>
@@ -168,7 +178,7 @@ export default async function AdminCreatorsPage() {
         <section className={`${card} flex flex-col overflow-hidden`}>
           {rows.length === 0 ? (
             <div className="px-6 py-12 text-center text-sm text-[#71717b]">
-              No approved creators yet.
+              No creators yet.
             </div>
           ) : (
             <ul className="divide-y divide-[#f0f1f3]">
