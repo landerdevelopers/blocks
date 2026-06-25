@@ -7,6 +7,7 @@ import ColorSearch from "./ColorSearch";
 import { ScrollFadeEffect } from "@/components/scroll-fade-effect";
 import { useAuthStore } from "@/store/authStore";
 import { createClient } from "@/lib/supabase/client";
+import { LANDER_ID, LANDER_BRAND } from "@/lib/lander";
 
 // Record a click on the "Lander Studio" link. Fire-and-forget — sendBeacon
 // survives the new-tab navigation; fetch+keepalive is the fallback.
@@ -30,6 +31,28 @@ type Creator = {
   avatar_url: string | null;
   bio: string | null;
   count: number;
+};
+
+// Synthetic creator row for the Lander Studio entry. Rendered with the Lander
+// logo (not an avatar), never fetched via get_creator, and its badge counts come
+// from get_lander_sidebar_counts (the admin aggregate) rather than one creator.
+const LANDER_CREATOR: Creator = {
+  id: LANDER_ID,
+  username: LANDER_ID,
+  full_name: LANDER_BRAND.display_name,
+  avatar_url: null,
+  bio: LANDER_BRAND.bio,
+  count: 0,
+};
+
+// Lander Studio brand socials — the SAME set the lightbox creator card shows for
+// admin uploads (both built from LANDER_BRAND). Shown when Lander is selected.
+const LANDER_SOCIALS = {
+  x_handle: LANDER_BRAND.x_handle,
+  instagram_handle: LANDER_BRAND.instagram_handle,
+  linkedin_handle: LANDER_BRAND.linkedin_handle,
+  website_url: LANDER_BRAND.website_url,
+  cta_url: LANDER_BRAND.cta_url,
 };
 
 // Sidebar section id -> public.components.category value.
@@ -394,6 +417,12 @@ export default function Sidebar({
       setCreatorSocials(null);
       return;
     }
+    // Lander Studio is an aggregate of admin uploads, not a profile — show the
+    // fixed brand socials (same as the lightbox card) instead of fetching.
+    if (selectedCreator.id === LANDER_ID) {
+      setCreatorSocials(LANDER_SOCIALS);
+      return;
+    }
     // Already have this creator's socials (seeded by restore) → no refetch.
     if (socialsLoadedFor.current === selectedCreator.username) return;
     let alive = true;
@@ -420,6 +449,18 @@ export default function Sidebar({
         setCreatorsLoaded(true);
       });
   }, [creatorsOpen, creatorsLoaded]);
+  // Lander Studio's total design count (sum of admin live uploads), loaded the
+  // first time the popup opens so its row shows a count badge like real creators.
+  const [landerCount, setLanderCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!creatorsOpen || landerCount !== null) return;
+    createClient()
+      .rpc("get_lander_sidebar_counts")
+      .then(({ data }) => {
+        const cats = (data as SidebarCounts | null)?.categories ?? {};
+        setLanderCount(Object.values(cats).reduce((a, b) => a + b, 0));
+      });
+  }, [creatorsOpen, landerCount]);
   const filteredCreators = creators.filter((c) =>
     (c.full_name ?? c.username).toLowerCase().includes(creatorQuery.toLowerCase()),
   );
@@ -437,14 +478,20 @@ export default function Sidebar({
       return;
     }
     let alive = true;
-    // Aggregated in-DB (get_creator_sidebar_counts) instead of pulling every one
-    // of the creator's component rows to tally in JS.
-    createClient()
-      .rpc("get_creator_sidebar_counts", { creator_id: selectedCreator.id })
-      .then(({ data }) => {
-        if (!alive || !data) return;
-        setCreatorCounts(data as SidebarCounts);
-      });
+    // Aggregated in-DB instead of pulling every component row to tally in JS.
+    // Lander Studio aggregates ALL admin uploads (get_lander_sidebar_counts);
+    // a real creator is scoped to its own uploads (get_creator_sidebar_counts).
+    const client = createClient();
+    const countsRpc =
+      selectedCreator.id === LANDER_ID
+        ? client.rpc("get_lander_sidebar_counts")
+        : client.rpc("get_creator_sidebar_counts", {
+            creator_id: selectedCreator.id,
+          });
+    countsRpc.then(({ data }) => {
+      if (!alive || !data) return;
+      setCreatorCounts(data as SidebarCounts);
+    });
     return () => {
       alive = false;
     };
@@ -488,6 +535,13 @@ export default function Sidebar({
     creatorRestored.current = true;
     const uname = new URLSearchParams(window.location.search).get("creator");
     if (!uname) return;
+    // Lander Studio is a sentinel, not a username → restore it directly without
+    // hitting get_creator (which would treat "lander-studio" as a missing user).
+    if (uname === LANDER_ID) {
+      pickCreator(LANDER_CREATOR);
+      onCreatorRestoreDone?.();
+      return;
+    }
     let alive = true;
     createClient()
       .rpc("get_creator", { uname })
@@ -602,7 +656,14 @@ export default function Sidebar({
                 <div className="flex min-w-0 items-center gap-2.5">
                   {selectedCreator ? (
                     <span className="flex size-[30px] shrink-0 items-center justify-center overflow-hidden rounded-md bg-[#ebebef] text-xs font-medium text-[#09090b]">
-                      {selectedCreator.avatar_url ? (
+                      {selectedCreator.id === LANDER_ID ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          alt=""
+                          src="/Lander_black.png"
+                          className="h-4 w-auto object-contain"
+                        />
+                      ) : selectedCreator.avatar_url ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                           alt=""
@@ -672,6 +733,42 @@ export default function Sidebar({
                           <span className="text-base tracking-[-0.03em] text-black">
                             All Creators
                           </span>
+                        </button>
+                        {/* Lander Studio — the official library (designs uploaded
+                            directly by admins). Pinned under All Creators. */}
+                        <button
+                          type="button"
+                          onClick={() => pickCreator(LANDER_CREATOR)}
+                          className={`group flex w-full cursor-pointer items-center justify-between p-2.5 transition-colors ${
+                            selectedCreator?.id === LANDER_ID
+                              ? "bg-[#f2f2f2]"
+                              : "hover:bg-[#fafafa]"
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[#ebebef]">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                alt=""
+                                src="/Lander_black.png"
+                                className="h-4 w-auto object-contain"
+                              />
+                            </span>
+                            <span className="text-base tracking-[-0.03em] text-black">
+                              Lander Studio
+                            </span>
+                          </span>
+                          {landerCount != null && (
+                            <span
+                              className={`flex h-[22px] w-[37px] shrink-0 items-center justify-center rounded-md text-xs font-medium tracking-[-0.03em] text-[#71717b] transition-colors ${
+                                selectedCreator?.id === LANDER_ID
+                                  ? "bg-white"
+                                  : "bg-[#f7f7f7] group-hover:bg-white"
+                              }`}
+                            >
+                              {landerCount}
+                            </span>
+                          )}
                         </button>
                         {/* Shimmer while the list loads. */}
                         {!creatorsLoaded &&
@@ -785,9 +882,10 @@ export default function Sidebar({
                 </p>
                 {creatorSocials &&
                   (() => {
-                    // Hire Creator deliberately omitted here. One social → icon +
-                    // label; two or more → icons only, each stretched to fill the
-                    // row evenly. Brand glyphs come from /public.
+                    // One social → icon + label; two or more → icons only, each
+                    // stretched to fill the row evenly. Brand glyphs come from
+                    // /public. Hire CTA is never shown here (incl. Lander Studio).
+                    const li = creatorSocials.linkedin_handle;
                     const socials = [
                       ...(creatorSocials.website_url
                         ? [
@@ -821,11 +919,15 @@ export default function Sidebar({
                             },
                           ]
                         : []),
-                      ...(creatorSocials.linkedin_handle
+                      ...(li
                         ? [
                             {
                               key: "li",
-                              href: `https://linkedin.com/in/${creatorSocials.linkedin_handle}`,
+                              // Lander's LinkedIn is a full company URL; a creator
+                              // stores just the /in/ handle.
+                              href: li.startsWith("http")
+                                ? li
+                                : `https://linkedin.com/in/${li}`,
                               label: "LinkedIn",
                               // eslint-disable-next-line @next/next/no-img-element
                               icon: <img src="/linkedin.svg" alt="" className="size-4" />,

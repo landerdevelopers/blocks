@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Sidebar, { type SidebarCounts } from "./components/Sidebar";
+import { LANDER_ID } from "@/lib/lander";
 import Gallery from "./components/Gallery";
 import LoginModal from "./components/LoginModal";
 import AccountModal from "./components/AccountModal";
@@ -147,6 +148,22 @@ function HomeInner({
   const [creatorRestorePending, setCreatorRestorePending] = useState(
     () => !!searchParams.get("creator"),
   );
+  // Admin profile ids backing the "Lander Studio" view (designs uploaded
+  // directly by admins). Loaded once, lazily, the first time Lander is picked —
+  // both the gallery query and the color-search filter scope to this set.
+  const [landerAdminIds, setLanderAdminIds] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (creatorId !== LANDER_ID || landerAdminIds) return;
+    let alive = true;
+    createClient()
+      .rpc("list_admin_ids")
+      .then(({ data }) => {
+        if (alive) setLanderAdminIds((data as string[]) ?? []);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [creatorId, landerAdminIds]);
   const [used, setUsed] = useState(0);
   const [showLimit, setShowLimit] = useState(false);
   const [showSuggest, setShowSuggest] = useState(false);
@@ -192,8 +209,13 @@ function HomeInner({
   // the normal gallery's filtering so color results stay in the chosen context.
   const matchesActiveFilters = (c: GalleryComponent): boolean => {
     // Scope to the selected creator (null = all creators → show everyone's),
-    // mirroring the normal gallery's uploaded_by filter.
-    if (creatorId && c.uploaded_by !== creatorId) return false;
+    // mirroring the normal gallery's uploaded_by filter. Lander Studio matches
+    // any admin uploader (the official library) rather than one creator id.
+    if (creatorId === LANDER_ID) {
+      if (!landerAdminIds?.includes(c.uploaded_by ?? "")) return false;
+    } else if (creatorId && c.uploaded_by !== creatorId) {
+      return false;
+    }
     const dbCat = CAT_MAP[activeCategory ?? "website"];
     if (c.category !== dbCat) return false;
     if (!activeFilters.length) return true;
@@ -216,7 +238,7 @@ function HomeInner({
     () =>
       colorSearchActive ? colorSearchAll.filter(matchesActiveFilters) : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [colorSearchActive, colorSearchAll, activeCategory, activeFilters, creatorId],
+    [colorSearchActive, colorSearchAll, activeCategory, activeFilters, creatorId, landerAdminIds],
   );
 
   // Displayed slice — grows by COLOR_PAGE_SIZE as the user scrolls.
@@ -451,6 +473,7 @@ function HomeInner({
           category={activeCategory}
           filters={activeFilters}
           creatorId={creatorId}
+          landerAdminIds={landerAdminIds}
           colorSearchActive={colorSearchActive}
           colorSearchLoading={colorSearchLoading}
           colorSearchResults={colorSearchResults}

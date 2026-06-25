@@ -1631,6 +1631,76 @@ as $$
 $$;
 grant execute on function public.get_creator_sidebar_counts(uuid) to anon, authenticated;
 
+-- ---------------------------------------------------------------------------
+-- RPC: list_admin_ids() — ids of admins who have at least one LIVE design. Backs
+-- the "Lander Studio" sidebar entry; the client scopes the gallery to
+-- uploaded_by IN these ids. Restricted to admins WITH live uploads so it never
+-- discloses an admin id the gallery rows don't already carry (every admin upload
+-- already exposes its uploaded_by). security definer is the public read path
+-- since profiles RLS is "own row only".
+-- ---------------------------------------------------------------------------
+create or replace function public.list_admin_ids()
+returns uuid[]
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(array_agg(distinct p.id), '{}'::uuid[])
+  from public.profiles p
+  join public.components c
+    on c.uploaded_by = p.id
+   and c.is_published = true
+   and c.is_private = false
+   and c.status = 'approved'
+  where p.role = 'admin';
+$$;
+grant execute on function public.list_admin_ids() to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- RPC: get_lander_sidebar_counts() — category / section / logo-letter badge
+-- counts for the "Lander Studio" view: every LIVE design (approved + public +
+-- published) uploaded directly by an admin. Mirrors get_creator_sidebar_counts
+-- but scoped to the whole admin set instead of one uploader.
+-- ---------------------------------------------------------------------------
+create or replace function public.get_lander_sidebar_counts()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with live as (
+    select category, section, filters
+    from public.components
+    where uploaded_by in (select id from public.profiles where role = 'admin')
+      and is_published = true and is_private = false and status = 'approved'
+  )
+  select jsonb_build_object(
+    'categories', (
+      select coalesce(jsonb_object_agg(category, n), '{}'::jsonb)
+      from (
+        select category, count(*) n from live
+        where category is not null group by category
+      ) t
+    ),
+    'sections', (
+      select coalesce(jsonb_object_agg(category || '|' || section, n), '{}'::jsonb)
+      from (
+        select category, section, count(*) n from live
+        where category is not null and section is not null
+        group by category, section
+      ) t
+    ),
+    'logoLetters', (
+      select coalesce(jsonb_agg(distinct f), '[]'::jsonb)
+      from live, unnest(coalesce(filters, '{}')) f
+      where category = 'Logos'
+    )
+  );
+$$;
+grant execute on function public.get_lander_sidebar_counts() to anon, authenticated;
+
 -- =============================================================================
 -- Analytics RPCs (admin-only; called via the service-role client which bypasses
 -- RLS). Aggregate inside Postgres so the analytics page never pulls raw event

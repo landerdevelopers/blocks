@@ -22,6 +22,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { LANDER_ID, LANDER_BRAND } from "@/lib/lander";
 import { revalidateSidebarCounts } from "@/app/actions";
 import { useAuthStore, type GalleryComponent } from "@/store/authStore";
 import {
@@ -60,19 +61,18 @@ type LightboxDetail = CreatorDetail & {
 };
 
 // Admin uploads have no real creator — show Lander Studio (the house agency)
-// instead. Website + LinkedIn + Hire all point at lander.studio. design_count
-// is left to the real per-uploader count from the RPC.
+// instead. Built from the shared LANDER_BRAND so the lightbox card and the
+// sidebar entry never drift. design_count is filled from the RPC per row.
 const LANDER: Omit<CreatorDetail, "creator_design_count"> = {
-  creator_username: "lander-studio",
-  creator_display_name: "Lander Studio",
-  creator_avatar_url: "/Lander_black.png",
-  creator_bio:
-    "Design agency crafting standout websites, brands, and product experiences.",
-  creator_x_handle: "praha37v",
-  creator_instagram_handle: null,
-  creator_linkedin_handle: "https://www.linkedin.com/company/lander-studio/",
-  creator_website_url: "https://lander.studio",
-  creator_cta_url: "https://lander.studio/booking",
+  creator_username: LANDER_ID,
+  creator_display_name: LANDER_BRAND.display_name,
+  creator_avatar_url: LANDER_BRAND.avatar_url,
+  creator_bio: LANDER_BRAND.bio,
+  creator_x_handle: LANDER_BRAND.x_handle,
+  creator_instagram_handle: LANDER_BRAND.instagram_handle,
+  creator_linkedin_handle: LANDER_BRAND.linkedin_handle,
+  creator_website_url: LANDER_BRAND.website_url,
+  creator_cta_url: LANDER_BRAND.cta_url,
   is_admin: true,
 };
 
@@ -156,6 +156,7 @@ export default function Gallery({
   category = null,
   filters = [],
   creatorId = null,
+  landerAdminIds = null,
   colorSearchActive = false,
   colorSearchLoading = false,
   colorSearchResults = null,
@@ -176,6 +177,10 @@ export default function Gallery({
   // scoped to the active category (their logos show under Logos, etc.). Selected
   // from the sidebar "All Creators" popup.
   creatorId?: string | null;
+  // Admin profile ids backing the "Lander Studio" view. Used only when creatorId
+  // is the LANDER_ID sentinel: the gallery scopes to uploaded_by IN these ids
+  // (all admin uploads) instead of a single creator. null while still loading.
+  landerAdminIds?: string[] | null;
   colorSearchActive?: boolean;
   colorSearchLoading?: boolean;
   colorSearchResults?: Component[] | null;
@@ -261,12 +266,19 @@ export default function Gallery({
         // (RLS lets an owner read their own private rows, so filter explicitly.)
         .eq("is_published", true)
         .eq("is_private", false);
-      if (creatorId) query = query.eq("uploaded_by", creatorId);
+      // Lander Studio = the admin-upload aggregate (uploaded_by IN admin ids);
+      // a real creator = one uploaded_by. singleCreator drives the per-creator
+      // ordering, which doesn't apply to the multi-uploader Lander view.
+      const isLander = creatorId === LANDER_ID;
+      const singleCreator = !!creatorId && !isLander;
+      if (isLander) query = query.in("uploaded_by", landerAdminIds ?? []);
+      else if (creatorId) query = query.eq("uploaded_by", creatorId);
       if (dbCat) query = query.eq("category", dbCat);
       // Creator view follows the creator's manual arrangement (creator_pinned_at),
-      // then newest. Category views: logos paginate ALPHABETICALLY by letter
-      // (stored in `filters`) so each batch fills A→Z; others pinned-first, newest.
-      if (creatorId) {
+      // then newest. Category + Lander views: logos paginate ALPHABETICALLY by
+      // letter (stored in `filters`) so each batch fills A→Z; others pinned-first,
+      // newest.
+      if (singleCreator) {
         query = query
           .order("creator_pinned_at", { ascending: false, nullsFirst: false })
           .order("created_at", { ascending: false });
@@ -316,6 +328,7 @@ export default function Gallery({
     [
       category,
       creatorId,
+      landerAdminIds,
       setComponents,
       appendComponents,
       setHasMore,
@@ -334,6 +347,15 @@ export default function Gallery({
     // Hold on skeletons rather than fetch the unscoped all-creators list — once
     // the id lands, creatorId changes and this effect re-runs scoped to it.
     if (creatorRestorePending && !creatorId) {
+      setCurrentCategory(cat);
+      setDisplayCategory(category);
+      clearComponents();
+      return;
+    }
+    // Lander Studio picked but its admin ids haven't loaded yet — hold on
+    // skeletons rather than fetch with an empty IN (which returns nothing).
+    // This effect re-runs once landerAdminIds lands.
+    if (creatorId === LANDER_ID && !landerAdminIds) {
       setCurrentCategory(cat);
       setDisplayCategory(category);
       clearComponents();
@@ -358,7 +380,7 @@ export default function Gallery({
     fetchingPageRef.current = false;
     fetchPage(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, creatorId, creatorRestorePending]);
+  }, [category, creatorId, creatorRestorePending, landerAdminIds]);
 
   // Reset scroll to the top on every category switch. Runs in a LAYOUT effect
   // keyed on the rendered category so it fires AFTER the new content commits —
