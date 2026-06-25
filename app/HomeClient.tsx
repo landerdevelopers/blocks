@@ -166,6 +166,8 @@ function HomeInner({
   }, [creatorId, landerAdminIds]);
   const [used, setUsed] = useState(0);
   const [showLimit, setShowLimit] = useState(false);
+  // Which cap was hit — drives the LimitModal copy (own daily cap vs per-network).
+  const [limitReason, setLimitReason] = useState<"user" | "ip">("user");
   const [showSuggest, setShowSuggest] = useState(false);
   const [suggestText, setSuggestText] = useState("");
   const [suggestSubmitting, setSuggestSubmitting] = useState(false);
@@ -306,30 +308,47 @@ function HomeInner({
     setShowLogin(true);
   };
 
-  // One copy: counted + limit-enforced server-side via the record_copy RPC
-  // (security definer). It also RETURNS figma_data when the copy is allowed —
-  // the only end-user path to it, since the column isn't directly selectable.
-  // So the limit can't be bypassed by fetching figma_data from devtools.
+  // One copy: counted + limit-enforced server-side via the /api/copy route, which
+  // applies BOTH the per-user daily limit AND a per-IP limit (the route sees the
+  // real IP; an RPC can't). It RETURNS figma_data only when the copy is allowed —
+  // the only end-user path to it — so neither limit can be bypassed from devtools.
   const tryCopy = async (
     componentId: string,
   ): Promise<{ allowed: boolean; figmaData: string | null }> => {
-    const supabase = createClient();
-    const { data, error } = await supabase.rpc("record_copy", {
-      component_id: componentId,
-    });
-    if (error || !data) {
-      console.error("[copy] record_copy:", error?.message);
+    let data: {
+      success?: boolean;
+      reason?: string;
+      copies_today?: number;
+      figma_data?: string | null;
+    } | null = null;
+    try {
+      const res = await fetch("/api/copy", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ componentId }),
+      });
+      data = await res.json();
+    } catch (e) {
+      console.error("[copy] /api/copy:", e);
       return { allowed: false, figmaData: null };
     }
-    if (!data.success) {
-      if (data.reason === "limit_reached") setShowLimit(true);
+    if (!data || !data.success) {
+      // Both the per-user and per-IP caps surface the limit modal, with copy
+      // tailored to which one was hit.
+      if (data?.reason === "limit_reached") {
+        setLimitReason("user");
+        setShowLimit(true);
+      } else if (data?.reason === "ip_limit_reached") {
+        setLimitReason("ip");
+        setShowLimit(true);
+      }
       return { allowed: false, figmaData: null };
     }
-    setUsed(data.copies_today);
+    setUsed(data.copies_today ?? 0);
     if (profile) {
       setProfile({
         ...profile,
-        copies_today: data.copies_today,
+        copies_today: data.copies_today ?? 0,
         last_copy_date: todayIST(),
       });
     }
@@ -502,6 +521,7 @@ function HomeInner({
         open={showLimit}
         onClose={() => setShowLimit(false)}
         limit={profile?.role === "creator" ? 50 : DAILY_LIMIT}
+        reason={limitReason}
       />
 
       {/* Floating bottom-right action — logged-in only. Hidden once the weekly

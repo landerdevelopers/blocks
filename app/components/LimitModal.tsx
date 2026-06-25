@@ -7,10 +7,15 @@ export default function LimitModal({
   open,
   onClose,
   limit,
+  reason = "user",
 }: {
   open: boolean;
   onClose: () => void;
   limit: number;
+  // "user" = the signed-in account's own daily cap; "ip" = the per-network cap
+  // (too many copies from this connection across accounts). Different copy so an
+  // IP-capped user isn't told their personal number, which they may not have hit.
+  reason?: "user" | "ip";
 }) {
   useEffect(() => {
     if (!open) return;
@@ -39,8 +44,9 @@ export default function LimitModal({
           You&apos;ve reached today&apos;s limit
         </p>
         <p className="text-[18px] leading-5 tracking-[-0.03em] text-[#71717b]">
-          As we continue building the platform, design copies are currently
-          limited to {limit} per day.
+          {reason === "ip"
+            ? "Too many copies from this network today. Please try again tomorrow."
+            : `As we continue building the platform, design copies are currently limited to ${limit} per day.`}
         </p>
       </div>
     </div>,

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { signInWithGoogle, signInWithMagicLink } from "@/lib/auth";
+import { signInWithGoogle } from "@/lib/auth";
 import { Input } from "@/components/ui/input";
 
 const imgLanderBlack = "/Lander_black.png";
@@ -51,13 +51,25 @@ export default function LoginModal({
     if (!email) return;
     setError(null);
     setLoading(true);
-    const { error } = await signInWithMagicLink(email);
-    setLoading(false);
-    if (error) {
-      setError(error.message);
-      return;
+    try {
+      // Routed through /api/magic-link so disposable / temp-mail domains are
+      // rejected before any email is sent.
+      const res = await fetch("/api/magic-link", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(data?.error ?? "Something went wrong. Please try again.");
+        return;
+      }
+      setSent(true);
+    } catch {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
     }
-    setSent(true);
   };
 
   if (!open || typeof document === "undefined") return null;

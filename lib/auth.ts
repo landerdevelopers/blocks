@@ -20,11 +20,6 @@ export async function signInWithGoogle() {
   });
 }
 
-// Magic link — emails a one-time sign-in link that returns via /auth/callback.
-export async function signInWithMagicLink(email: string) {
-  const supabase = createClient();
-  return supabase.auth.signInWithOtp({
-    email,
-    options: { emailRedirectTo: getRedirectTo() },
-  });
-}
+// Magic-link sending now lives in the /api/magic-link route so disposable email
+// domains are rejected server-side before any email is sent (the client can't be
+// trusted to enforce that). See app/api/magic-link/route.ts.

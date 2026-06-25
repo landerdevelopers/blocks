@@ -145,6 +145,15 @@ create unique index if not exists login_events_user_date_uniq
 -- Pulls full_name / avatar_url from raw_user_meta_data (covers Google OAuth).
 -- -----------------------------------------------------------------------------
 
+-- Disposable / temp-mail domains, seeded from the `disposable-email-domains`
+-- list (see scripts/seed-disposable-domains.mjs). Lookup is a PK hit. No client
+-- grants/policies: only the security-definer signup trigger and the service-role
+-- magic-link route read it, so the list stays private and tamper-proof.
+create table if not exists public.disposable_domains (
+  domain text primary key
+);
+alter table public.disposable_domains enable row level security;
+
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -152,6 +161,17 @@ security definer
 set search_path = public
 as $$
 begin
+  -- Block disposable / temp-mail signups outright. Raising here aborts the
+  -- auth.users insert (same txn), so the account is never created — this is the
+  -- hard enforcement that a direct signInWithOtp call can't bypass. Google OAuth
+  -- emails (gmail.com, etc.) aren't in the list, so they pass through.
+  if new.email is not null and exists (
+    select 1 from public.disposable_domains d
+    where d.domain = lower(split_part(new.email, '@', 2))
+  ) then
+    raise exception 'disposable email domain not allowed';
+  end if;
+
   insert into public.profiles (id, full_name, avatar_url, email)
   values (
     new.id,
@@ -720,6 +740,119 @@ begin
   );
 end;
 $$;
+
+-- record_copy is now reachable ONLY through the /api/copy route (which adds the
+-- per-IP limit). Revoke the direct end-user grant so a devtools rpc('record_copy')
+-- can't bypass the IP cap. service_role keeps access for any internal use.
+revoke execute on function public.record_copy(uuid) from anon, authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Per-IP daily copy counter. Catches one person farming copies across many
+-- throwaway accounts from the same IP. (ip, day) PK → every read/write is a
+-- single index hit. No client grants/policies: only the service-role record_copy_ip
+-- path touches it.
+-- -----------------------------------------------------------------------------
+create table if not exists public.ip_copy_counts (
+  ip     text not null,
+  day    date not null,
+  copies int  not null default 0,
+  primary key (ip, day)
+);
+alter table public.ip_copy_counts enable row level security;
+
+-- -----------------------------------------------------------------------------
+-- RPC: record_copy_ip(p_user, p_component, p_ip) — the IP-aware copy path called
+-- by /api/copy. Enforces BOTH the per-user daily limit (10 user / 50 creator) and
+-- a per-IP daily limit (30) atomically, increments both counters, and returns
+-- figma_data on success. SERVICE-ROLE ONLY: p_user is resolved from the verified
+-- cookie session in the route and p_ip from request headers, so neither can be
+-- spoofed by a client (which can't execute this function at all).
+-- -----------------------------------------------------------------------------
+create or replace function public.record_copy_ip(
+  p_user uuid, p_component uuid, p_ip text
+)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  prof profiles%rowtype;
+  today_ist date := (now() at time zone 'Asia/Kolkata')::date;
+  fdata text;
+  is_admin boolean;
+  ip_enforced boolean;
+  lim int;
+  ip_lim int := 30;
+  ip_used int;
+begin
+  if p_user is null then
+    return json_build_object('success', false, 'reason', 'unauthenticated');
+  end if;
+
+  select * into prof from profiles where id = p_user;
+  if not found then
+    return json_build_object('success', false, 'reason', 'unauthenticated');
+  end if;
+  is_admin := (prof.role = 'admin');
+  -- The per-IP cap targets anonymous multi-account abuse. Admins AND creators are
+  -- trusted (creators keep their full personal 50), so the IP cap applies only to
+  -- regular users.
+  ip_enforced := not is_admin and prof.role is distinct from 'creator';
+  lim := case when prof.role = 'creator' then 50 else 10 end;
+
+  if not is_admin then
+    -- Per-user daily limit (reset the counter on a new IST day).
+    if prof.last_copy_date = today_ist then
+      if prof.copies_today >= lim then
+        return json_build_object('success', false, 'reason', 'limit_reached');
+      end if;
+    else
+      update profiles set copies_today = 0, last_copy_date = today_ist where id = p_user;
+      prof.copies_today := 0;
+    end if;
+
+    -- Per-IP daily limit (regular users only; skipped when the IP is unknown, so
+    -- we never wrongly block a user we can't attribute an IP to).
+    if ip_enforced and p_ip is not null and p_ip <> '' then
+      select copies into ip_used from ip_copy_counts where ip = p_ip and day = today_ist;
+      if ip_used is not null and ip_used >= ip_lim then
+        return json_build_object('success', false, 'reason', 'ip_limit_reached');
+      end if;
+    end if;
+  end if;
+
+  -- Only published components are copyable.
+  select c.figma_data into fdata
+  from components c
+  where c.id = p_component and c.is_published = true;
+  if not found then
+    return json_build_object('success', false, 'reason', 'not_found');
+  end if;
+
+  if not is_admin then
+    update profiles
+      set copies_today = copies_today + 1, last_copy_date = today_ist
+      where id = p_user;
+    -- Only regular users count toward (and against) the per-IP cap.
+    if ip_enforced and p_ip is not null and p_ip <> '' then
+      insert into ip_copy_counts (ip, day, copies) values (p_ip, today_ist, 1)
+      on conflict (ip, day) do update set copies = ip_copy_counts.copies + 1;
+    end if;
+  end if;
+
+  insert into copy_events (user_id, component_id, date)
+  values (p_user, p_component, today_ist);
+
+  return json_build_object(
+    'success', true,
+    'copies_today', case when is_admin then prof.copies_today else prof.copies_today + 1 end,
+    'figma_data', fdata
+  );
+end;
+$$;
+revoke execute on function public.record_copy_ip(uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.record_copy_ip(uuid, uuid, text) to service_role;
 
 -- -----------------------------------------------------------------------------
 -- RPC: get_component_figma_data(component_id uuid)
