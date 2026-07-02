@@ -17,6 +17,14 @@ const ROW_TOP = [
   `${CDN}/4ead29cc-230f-4a6e-eea1-f663058c0c00/thumbnail`,
   `${CDN}/431c9b46-e98c-4efb-2496-4510ba619000/thumbnail`,
 ];
+const ROW_MIDDLE = [
+  `${CDN}/b91e8183-6a7c-401f-b925-fea906bef100/thumbnail`,
+  `${CDN}/7fbe3508-fc8a-4522-50d0-2b6bfeb22e00/thumbnail`,
+  `${CDN}/ac9d4089-30e2-4dfb-fbae-111ab9067100/thumbnail`,
+  `${CDN}/75eeee83-1db4-46a9-74bf-8ca576710500/thumbnail`,
+  `${CDN}/4920a4bf-9c00-4c9e-415f-0731725f4600/thumbnail`,
+  `${CDN}/54b7c0a1-66e4-4811-22c2-a67a636b5000/thumbnail`,
+];
 const ROW_BOTTOM = [
   `${CDN}/86669e86-accc-42b7-cf4f-4cde43ac7400/thumbnail`,
   `${CDN}/cfbe8e94-4594-4a36-0cf2-c10894bd5b00/thumbnail`,
@@ -89,7 +97,8 @@ export default function MobileGate() {
       {/* Two opposite-scrolling carousels */}
       <div className="mt-2 flex w-full flex-col gap-[14px]">
         <Carousel images={ROW_TOP} reverse />
-        <Carousel images={ROW_BOTTOM} />
+        <Carousel images={ROW_MIDDLE} />
+        <Carousel images={ROW_BOTTOM} reverse />
       </div>
 
       {/* Solid white base — fully hides the carousels behind/below the banner. */}
