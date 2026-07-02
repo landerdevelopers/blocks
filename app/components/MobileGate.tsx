@@ -59,13 +59,20 @@ export default function MobileGate() {
           </p>
           <div className="flex items-center gap-[6px] text-[18px] tracking-[-0.54px] text-[#333338]">
             <span>by</span>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/mobile/lander-mark.svg"
-              alt=""
-              className="h-[15px] w-[12px]"
-            />
-            <span>Lander Studio</span>
+            <a
+              href="https://lander.studio"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-[6px] hover:underline"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/mobile/lander-mark.svg"
+                alt=""
+                className="h-[15px] w-[12px]"
+              />
+              <span>Lander Studio</span>
+            </a>
           </div>
         </div>
         <div className="flex max-w-[380px] flex-col items-center gap-[14px] text-center">
