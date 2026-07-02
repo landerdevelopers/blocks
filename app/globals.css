@@ -39,3 +39,30 @@ body {
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
+
+/* Horizontal marquee. Track holds its items TWICE, so translating by -50%
+   loops seamlessly. Reverse direction makes the row scroll the other way. */
+@keyframes marquee-x {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee-x 50s linear infinite;
+}
+
+.marquee-reverse {
+  animation-direction: reverse;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track {
+    animation: none;
+  }
+}

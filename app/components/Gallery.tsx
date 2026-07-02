@@ -1027,15 +1027,14 @@ export default function Gallery({
           className="shrink-0 text-[#4D4D4D]"
         />
         <span className="truncate text-[14px] tracking-[-0.03em] text-[#4D4D4D]">
-          Now you can upload your designs to Blocks, get discovered by designers,
-          and gain more exposure.{" "}
+          We recently launched animated components for Framer, React, and MCP for AI tools to build modern websites.{" "}
           <a
-            href="/creator-rules"
+            href=" https://www.originkit.dev/?invite=j347usrcra"
             target="_blank"
             rel="noopener noreferrer"
-            className="underline underline-offset-2 ml-1 transition-colors hover:text-black"
+            className="underline underline-offset-2 ml-1 text-black transition-colors hover:text-black/70"
           >
-            Apply here
+            Get access here
           </a>
         </span>
       </div>

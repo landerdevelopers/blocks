@@ -256,6 +256,10 @@ alter table public.profiles add column if not exists instagram_handle text;
 alter table public.profiles add column if not exists linkedin_handle  text;
 alter table public.profiles add column if not exists website_url      text;
 alter table public.profiles add column if not exists cta_url          text;
+-- Set true once the user has seen the OriginKit promo modal (auto-opened once
+-- on first visit). Follows the account across devices/browsers.
+alter table public.profiles
+  add column if not exists originkit_seen boolean not null default false;
 
 -- profiles: a logged-in user manages only their own row (RLS scopes it to
 -- auth.uid()). anon needs no access.
@@ -265,19 +269,19 @@ alter table public.profiles add column if not exists cta_url          text;
 -- "update own" RLS policy can't restrict columns. Those columns change ONLY via
 -- SECURITY DEFINER functions (record_copy, set_my_username, etc.) or the
 -- service-role client. Keep this column list in sync with the user-editable
--- fields (full_name, avatar_url, bio, username, creator_onboarded, beta).
+-- fields (full_name, avatar_url, bio, username, creator_onboarded, originkit_seen).
 -- The revoke first clears any prior table-wide insert/update grant (a subset
 -- re-grant does NOT remove it), so the column-scoped grants are the only ones.
 grant select on public.profiles to authenticated;
 revoke insert, update on public.profiles from authenticated;
-grant insert (id, full_name, avatar_url, bio, username, creator_onboarded)
+grant insert (id, full_name, avatar_url, bio, username, creator_onboarded, originkit_seen)
   on public.profiles to authenticated;
 -- `id` is included so PostgREST upserts work (ON CONFLICT DO UPDATE sets every
 -- payload column, including the PK). It's safe: the "update own" RLS with-check
 -- (auth.uid() = id) forbids changing id to anyone else's — it can only ever be
 -- set back to the user's own id. `role`, `copies_today`, `last_copy_date` stay
 -- OUT (the whole point) so privilege escalation / limit-reset remain blocked.
-grant update (id, full_name, avatar_url, bio, username, creator_onboarded)
+grant update (id, full_name, avatar_url, bio, username, creator_onboarded, originkit_seen)
   on public.profiles to authenticated;
 
 -- components: everyone may read (published-only via RLS); writes are admin-only

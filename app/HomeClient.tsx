@@ -21,39 +21,10 @@ import {
   type GalleryComponent,
 } from "@/store/authStore";
 import { todayIST } from "@/lib/ist";
-import { Textarea } from "@/components/ui/textarea";
+import OriginKitCard from "./components/OriginKitCard";
+import OriginKitModal from "./components/OriginKitModal";
 
 const DAILY_LIMIT = 10;
-
-// Suggest-improvements quota: 3 submissions per ISO week, tracked per browser in
-// localStorage. The button hides once used up and reappears the next week.
-const SUGGEST_WEEKLY_LIMIT = 3;
-const SUGGEST_QUOTA_KEY = "suggest_quota";
-
-function currentWeekKey(): string {
-  const d = new Date();
-  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const day = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() + 4 - day); // ISO: Thursday of this week
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  const week = Math.ceil(
-    ((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7,
-  );
-  return `${date.getUTCFullYear()}-W${week}`;
-}
-
-// Submissions used in the CURRENT week (0 if the stored week has rolled over).
-function readSuggestUsed(): number {
-  if (typeof window === "undefined") return 0;
-  try {
-    const raw = localStorage.getItem(SUGGEST_QUOTA_KEY);
-    if (!raw) return 0;
-    const { week, count } = JSON.parse(raw);
-    return week === currentWeekKey() ? (count ?? 0) : 0;
-  } catch {
-    return 0;
-  }
-}
 
 const HEX6 = /^#[0-9a-fA-F]{6}$/;
 
@@ -168,18 +139,32 @@ function HomeInner({
   const [showLimit, setShowLimit] = useState(false);
   // Which cap was hit — drives the LimitModal copy (own daily cap vs per-network).
   const [limitReason, setLimitReason] = useState<"user" | "ip">("user");
-  const [showSuggest, setShowSuggest] = useState(false);
-  const [suggestText, setSuggestText] = useState("");
-  const [suggestSubmitting, setSuggestSubmitting] = useState(false);
-  const [showSuggestSuccess, setShowSuggestSuccess] = useState(false);
-  // Weekly quota for the suggest button (read from localStorage after mount to
-  // avoid a hydration mismatch on the button's visibility).
-  const [suggestUsed, setSuggestUsed] = useState(0);
-  const [suggestMounted, setSuggestMounted] = useState(false);
+  const [showOriginKit, setShowOriginKit] = useState(false);
+  // Auto-open the OriginKit promo once on the user's first visit. Logged-in
+  // users are tracked server-side (profiles.originkit_seen) so it follows the
+  // account across devices; anonymous visitors fall back to a per-browser
+  // localStorage flag. Waits for auth to resolve so we don't misfire the anon
+  // path while the profile is still loading.
   useEffect(() => {
-    setSuggestMounted(true);
-    setSuggestUsed(readSuggestUsed());
-  }, []);
+    if (authLoading) return;
+    if (profile) {
+      if (profile.originkit_seen) return;
+      setShowOriginKit(true);
+      // Persist immediately (both server + local store) so it never reopens.
+      setProfile({ ...profile, originkit_seen: true });
+      createClient()
+        .from("profiles")
+        .update({ originkit_seen: true })
+        .eq("id", profile.id)
+        .then(({ error }) => {
+          if (error) console.error("[originkit] mark seen:", error.message);
+        });
+    } else {
+      if (localStorage.getItem("originkit_seen")) return;
+      localStorage.setItem("originkit_seen", "1");
+      setShowOriginKit(true);
+    }
+  }, [authLoading, profile, setProfile]);
   // Active sidebar selection — drives which components the gallery shows.
   // Persisted so the correct category (and its column count) is known on refresh.
   const [activeCategory, setActiveCategory] = useState<string | null>(
@@ -407,40 +392,6 @@ function HomeInner({
     return () => clearInterval(id);
   }, [profile, setProfile]);
 
-  // Save an improvement suggestion to the DB, then close the modal.
-  const submitSuggestion = async () => {
-    const message = suggestText.trim();
-    if (!message || suggestSubmitting) return;
-    if (suggestUsed >= SUGGEST_WEEKLY_LIMIT) return; // weekly quota exhausted
-    setSuggestSubmitting(true);
-    const { error } = await createClient()
-      .from("improvements")
-      .insert({ message, user_id: profile?.id ?? null });
-    setSuggestSubmitting(false);
-    if (error) {
-      console.error("[suggest] insert:", error.message);
-      return;
-    }
-    // Count this submission against the weekly quota (per browser).
-    const week = currentWeekKey();
-    let next = 1;
-    try {
-      const raw = localStorage.getItem(SUGGEST_QUOTA_KEY);
-      const parsed = raw ? JSON.parse(raw) : null;
-      next = parsed && parsed.week === week ? (parsed.count ?? 0) + 1 : 1;
-      localStorage.setItem(
-        SUGGEST_QUOTA_KEY,
-        JSON.stringify({ week, count: next }),
-      );
-    } catch {
-      // ignore storage errors
-    }
-    setSuggestUsed(next);
-    setShowSuggest(false);
-    setSuggestText("");
-    setShowSuggestSuccess(true);
-  };
-
   // On a fresh onboarding redirect, keep the homepage hidden until auth resolves
   // (the onboarding modal renders on top via its own portal). Zero flash.
   if (onboardingRedirect && authLoading) {
@@ -524,114 +475,13 @@ function HomeInner({
         reason={limitReason}
       />
 
-      {/* Floating bottom-right action — logged-in only. Hidden once the weekly
-          quota (3/week) is used up, reappears next week. Gated on
-          `suggestMounted` to avoid a hydration mismatch (localStorage is
-          client-only). */}
-      {loggedIn && suggestMounted && suggestUsed < SUGGEST_WEEKLY_LIMIT && (
-        <button
-          type="button"
-          onClick={() => setShowSuggest(true)}
-          className="fixed bottom-6 right-8 z-50 flex cursor-pointer items-center gap-2 rounded-[10px] border-[1.5px] border-white bg-[#e6e6e6] px-3.5 py-2.5 text-[16px] tracking-[-0.03em] text-[#474747] shadow-[0px_0px_0px_1px_rgba(0,0,0,0.06),0px_1px_2px_rgba(0,0,0,0.1),0px_8px_24px_rgba(0,0,0,0.12)] ring-1 ring-black/5 transition-[background-color,color,box-shadow] hover:bg-[#f0f0f0] hover:text-[#202020] hover:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.08),0px_2px_4px_rgba(0,0,0,0.12),0px_12px_32px_rgba(0,0,0,0.16)]"
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/bulb.svg" alt="" className="size-[18px] shrink-0" />
-          Suggest Improvements
-        </button>
-      )}
+      {/* Floating bottom-right promo — teases OriginKit, opens the full modal. */}
+      <OriginKitCard onOpen={() => setShowOriginKit(true)} />
 
-      {/* Suggest Improvements modal */}
-      {showSuggest && (
-        <div
-          onClick={() => setShowSuggest(false)}
-          className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="flex h-[260px] w-[440px] max-w-full flex-col gap-5 rounded-2xl bg-white p-6 shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
-          >
-            <div className="flex flex-col gap-1">
-              <div className="flex items-start justify-between">
-                <h2 className="text-[16px] font-medium tracking-[-0.03em] text-[#09090b]">
-                  Suggest Improvements
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => setShowSuggest(false)}
-                  aria-label="Close"
-                  className="cursor-pointer text-[#71717b] transition-colors hover:text-[#09090b]"
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                  </svg>
-                </button>
-              </div>
-              <p className="text-[14px] tracking-[-0.03em] text-[#71717b]">
-                Have an idea to make Blocks better? Share it with us.
-              </p>
-            </div>
-
-            <Textarea
-              value={suggestText}
-              onChange={(e) => setSuggestText(e.target.value)}
-              placeholder="Tell us what we can do better…"
-              className="flex-1"
-            />
-
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setShowSuggest(false)}
-                className="cursor-pointer rounded-[10px] border border-[#e7e9ee] px-4 py-2 text-[14px] tracking-[-0.03em] text-[#52525b] transition-colors hover:bg-[#fafafa]"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={submitSuggestion}
-                disabled={suggestSubmitting || !suggestText.trim()}
-                className="cursor-pointer rounded-[10px] bg-[#2974ff] px-4 py-2 text-[14px] tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {suggestSubmitting ? "Submitting…" : "Submit"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Suggestion submitted — success modal */}
-      {showSuggestSuccess && (
-        <div
-          onClick={() => setShowSuggestSuccess(false)}
-          className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="flex h-fit w-[440px] max-w-full flex-col items-center rounded-2xl bg-white p-10 shadow-[0px_12px_40px_rgba(0,0,0,0.2)]"
-          >
-            <div className="flex size-12 items-center justify-center rounded-[10px] bg-[#e3f7ec]">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/feedtick.svg" alt="" className="size-6" />
-            </div>
-            <div className="mt-4 flex flex-col items-center gap-1 text-center">
-              <h2 className="text-[18px] font-medium tracking-[-0.03em] text-[#09090b]">
-                Thanks for Helping Us Improve
-              </h2>
-              <p className="text-[16px] tracking-[-0.03em] text-[#71717b]">
-                Your suggestion has been submitted successfully. Your feedback shapes great features.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowSuggestSuccess(false)}
-              className="mt-[24px] w-full cursor-pointer rounded-[10px] bg-[#2974ff] px-4 py-2 text-[16px] font-medium tracking-[-0.03em] text-white transition-colors hover:bg-[#1f63e6]"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
+      <OriginKitModal
+        open={showOriginKit}
+        onClose={() => setShowOriginKit(false)}
+      />
     </div>
   );
 }

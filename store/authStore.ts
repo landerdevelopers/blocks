@@ -39,6 +39,9 @@ export type Profile = {
   linkedin_handle?: string | null;
   website_url?: string | null;
   cta_url?: string | null;
+  // True once the user has seen the OriginKit promo modal (auto-opened once on
+  // first visit). Persisted server-side so it follows the account across devices.
+  originkit_seen?: boolean;
 };
 
 // Minimal component shape the gallery renders.
