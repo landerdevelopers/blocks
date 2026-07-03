@@ -31,7 +31,7 @@ export default function OriginKitCard({ onOpen }: { onOpen: () => void }) {
       >
         <video
           ref={videoRef}
-          src="https://cdn.originkit.dev/Originkit%20(1)%20(2).mp4"
+          src="https://cdn.originkit.dev/WhatsApp%20Video%202026-07-02%20at%2011.40.56%20AM.mp4"
           className="h-full w-full object-cover"
           autoPlay
           muted
