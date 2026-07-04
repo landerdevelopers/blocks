@@ -21,8 +21,6 @@ import {
   type GalleryComponent,
 } from "@/store/authStore";
 import { todayIST } from "@/lib/ist";
-import OriginKitCard from "./components/OriginKitCard";
-import OriginKitModal from "./components/OriginKitModal";
 
 const DAILY_LIMIT = 10;
 
@@ -139,32 +137,6 @@ function HomeInner({
   const [showLimit, setShowLimit] = useState(false);
   // Which cap was hit — drives the LimitModal copy (own daily cap vs per-network).
   const [limitReason, setLimitReason] = useState<"user" | "ip">("user");
-  const [showOriginKit, setShowOriginKit] = useState(false);
-  // Auto-open the OriginKit promo once on the user's first visit. Logged-in
-  // users are tracked server-side (profiles.originkit_seen) so it follows the
-  // account across devices; anonymous visitors fall back to a per-browser
-  // localStorage flag. Waits for auth to resolve so we don't misfire the anon
-  // path while the profile is still loading.
-  useEffect(() => {
-    if (authLoading) return;
-    if (profile) {
-      if (profile.originkit_seen) return;
-      setShowOriginKit(true);
-      // Persist immediately (both server + local store) so it never reopens.
-      setProfile({ ...profile, originkit_seen: true });
-      createClient()
-        .from("profiles")
-        .update({ originkit_seen: true })
-        .eq("id", profile.id)
-        .then(({ error }) => {
-          if (error) console.error("[originkit] mark seen:", error.message);
-        });
-    } else {
-      if (localStorage.getItem("originkit_seen")) return;
-      localStorage.setItem("originkit_seen", "1");
-      setShowOriginKit(true);
-    }
-  }, [authLoading, profile, setProfile]);
   // Active sidebar selection — drives which components the gallery shows.
   // Persisted so the correct category (and its column count) is known on refresh.
   const [activeCategory, setActiveCategory] = useState<string | null>(
@@ -475,13 +447,6 @@ function HomeInner({
         reason={limitReason}
       />
 
-      {/* Floating bottom-right promo — teases OriginKit, opens the full modal. */}
-      <OriginKitCard onOpen={() => setShowOriginKit(true)} />
-
-      <OriginKitModal
-        open={showOriginKit}
-        onClose={() => setShowOriginKit(false)}
-      />
     </div>
   );
 }
