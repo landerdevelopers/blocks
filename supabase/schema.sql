@@ -73,6 +73,11 @@ create table if not exists public.copy_events (
   copied_at    timestamptz not null default now(),
   date         date        not null default current_date
 );
+-- ip: the copier's request IP, stamped by record_copy_ip. Lets analytics bucket
+-- distinct IPs by HOUR (ip_copy_counts is a per-day aggregate with no timestamp,
+-- so it can't). Null for rows written before this column / by the legacy
+-- record_copy path. Never client-set (that path is service-role only).
+alter table public.copy_events add column if not exists ip text;
 
 -- One row per successful login, written from the client on the SIGNED_IN auth
 -- event. `date` is the login day (set client-side). Powers the analytics page.
@@ -120,6 +125,9 @@ create index if not exists login_events_date_idx     on public.login_events (dat
 -- heap scans, and copy_events_date_idx speeds the plain date-range counts.
 create index if not exists copy_events_date_idx       on public.copy_events (date);
 create index if not exists copy_events_date_user_idx  on public.copy_events (date, user_id);
+-- Hourly distinct-IP scan (get_analytics_hourly): count(distinct ip) filtered by
+-- the IST day, so lead with date.
+create index if not exists copy_events_date_ip_idx    on public.copy_events (date, ip);
 create index if not exists login_events_date_user_idx on public.login_events (date, user_id);
 -- Gallery list: a partial covering index for the exact predicate the gallery
 -- query uses (published + public), ordered newest-first within a category.
@@ -845,8 +853,8 @@ begin
     end if;
   end if;
 
-  insert into copy_events (user_id, component_id, date)
-  values (p_user, p_component, today_ist);
+  insert into copy_events (user_id, component_id, date, ip)
+  values (p_user, p_component, today_ist, nullif(p_ip, ''));
 
   return json_build_object(
     'success', true,
@@ -1987,46 +1995,57 @@ revoke execute on function public.get_analytics_windows(date, date, date)
 -- record, in ip_copy_counts). All day bucketing is IST. Computed in-DB so no raw
 -- rows reach JS.
 create or replace function public.get_analytics_daily(
-  d_from date,
-  d_to   date
+  d_from date default null,
+  d_to   date default null
 )
 returns jsonb
 language sql
 stable
 as $$
-  with days as (
+  with bounds as (
+    select
+      coalesce(d_from, (
+        select least(
+          (select min((created_at at time zone 'Asia/Kolkata')::date) from public.profiles),
+          (select min(date) from public.copy_events),
+          (select min(date) from public.login_events)
+        )
+      )) as lo,
+      coalesce(d_to, (now() at time zone 'Asia/Kolkata')::date) as hi
+  ),
+  days as (
     select d::date as day
-    from generate_series(d_from, d_to, interval '1 day') as g(d)
+    from bounds, generate_series(bounds.lo, bounds.hi, interval '1 day') as g(d)
   ),
   signups as (
     select (p.created_at at time zone 'Asia/Kolkata')::date as day, count(*) as n
-    from public.profiles p
-    where (p.created_at at time zone 'Asia/Kolkata')::date between d_from and d_to
+    from public.profiles p, bounds
+    where (p.created_at at time zone 'Asia/Kolkata')::date between bounds.lo and bounds.hi
     group by 1
   ),
   copies as (
     select ce.date as day,
            count(*)                   as copies,
            count(distinct ce.user_id) as uniq_copiers
-    from public.copy_events ce
-    where ce.date between d_from and d_to
+    from public.copy_events ce, bounds
+    where ce.date between bounds.lo and bounds.hi
     group by 1
   ),
   active as (
     select day, count(distinct user_id) as n
     from (
-      select user_id, date as day from public.copy_events
-      where date between d_from and d_to and user_id is not null
+      select ce.user_id, ce.date as day from public.copy_events ce, bounds
+      where ce.date between bounds.lo and bounds.hi and ce.user_id is not null
       union all
-      select user_id, date as day from public.login_events
-      where date between d_from and d_to and user_id is not null
+      select le.user_id, le.date as day from public.login_events le, bounds
+      where le.date between bounds.lo and bounds.hi and le.user_id is not null
     ) a
     group by 1
   ),
   ips as (
     select day, count(distinct ip) as n
-    from public.ip_copy_counts
-    where day between d_from and d_to
+    from public.ip_copy_counts ic, bounds
+    where ic.day between bounds.lo and bounds.hi
     group by 1
   )
   select coalesce(jsonb_agg(
@@ -2049,6 +2068,69 @@ $$;
 -- then revoke the default PUBLIC access.
 grant execute on function public.get_analytics_daily(date, date) to service_role;
 revoke execute on function public.get_analytics_daily(date, date)
+  from public, anon, authenticated;
+
+-- get_analytics_hourly(d_day) — the same five metrics bucketed into the 24 IST
+-- hours of d_day (0..23, gap-filled), as a JSON array ordered by hour. Powers the
+-- "Today" trend view. `date` holds the zero-padded hour ("00".."23"). uniqueIps
+-- comes from copy_events.ip (stamped per copy by record_copy_ip); rows written
+-- before that column existed have null ip and don't count. All bucketing is IST.
+create or replace function public.get_analytics_hourly(d_day date)
+returns jsonb
+language sql
+stable
+as $$
+  with hours as (select generate_series(0, 23) as hr),
+  signups as (
+    select extract(hour from (p.created_at at time zone 'Asia/Kolkata'))::int as hr,
+           count(*) as n
+    from public.profiles p
+    where (p.created_at at time zone 'Asia/Kolkata')::date = d_day
+    group by 1
+  ),
+  copies as (
+    select extract(hour from (ce.copied_at at time zone 'Asia/Kolkata'))::int as hr,
+           count(*)                   as copies,
+           count(distinct ce.user_id) as uniq_copiers,
+           count(distinct ce.ip)      as uniq_ips
+    from public.copy_events ce
+    where (ce.copied_at at time zone 'Asia/Kolkata')::date = d_day
+    group by 1
+  ),
+  active as (
+    select hr, count(distinct user_id) as n
+    from (
+      select ce.user_id,
+             extract(hour from (ce.copied_at at time zone 'Asia/Kolkata'))::int as hr
+      from public.copy_events ce
+      where (ce.copied_at at time zone 'Asia/Kolkata')::date = d_day
+        and ce.user_id is not null
+      union all
+      select le.user_id,
+             extract(hour from (le.logged_in_at at time zone 'Asia/Kolkata'))::int as hr
+      from public.login_events le
+      where (le.logged_in_at at time zone 'Asia/Kolkata')::date = d_day
+        and le.user_id is not null
+    ) a
+    group by 1
+  )
+  select coalesce(jsonb_agg(
+    jsonb_build_object(
+      'date',          lpad(hours.hr::text, 2, '0'),
+      'newSignups',    coalesce(signups.n, 0),
+      'activeUsers',   coalesce(active.n, 0),
+      'copies',        coalesce(copies.copies, 0),
+      'uniqueCopiers', coalesce(copies.uniq_copiers, 0),
+      'uniqueIps',     coalesce(copies.uniq_ips, 0)
+    ) order by hours.hr
+  ), '[]'::jsonb)
+  from hours
+  left join signups on signups.hr = hours.hr
+  left join copies  on copies.hr  = hours.hr
+  left join active  on active.hr  = hours.hr;
+$$;
+grant execute on function public.get_analytics_hourly(date) to service_role;
+revoke execute on function public.get_analytics_hourly(date)
   from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------

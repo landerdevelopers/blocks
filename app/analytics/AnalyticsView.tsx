@@ -66,8 +66,10 @@ export type DailyPoint = {
 export type AnalyticsData = {
   stats: { today: Stats; "7d": Stats; all: Stats; date: Stats | null };
   topComponents: TopComponent[];
-  // Per-day trend series (last 30 IST days) for the charts.
+  // Full per-day trend series (charts slice it per tab); `date` = YYYY-MM-DD.
   daily: DailyPoint[];
+  // Hourly buckets for today (charts use it for the Today tab); `date` = "00".."23".
+  hourly: DailyPoint[];
   // Lander Studio visits windowed like the KPIs (date is null unless a day picked).
   landerVisits: { today: number; "7d": number; all: number; date: number | null };
   perUser: { tabs: PerUserRow[]; date: PerUserRow[] | null };
@@ -224,7 +226,7 @@ function AnalyticsContent({
   today: string;
   initialDate: string | null;
 }) {
-  const { stats, topComponents, daily, landerVisits, perUser, categoryById } =
+  const { stats, topComponents, daily, hourly, landerVisits, perUser, categoryById } =
     use(dataPromise);
 
   const current: Stats =
@@ -235,6 +237,22 @@ function AnalyticsContent({
   const landerNow =
     view === "date" ? (landerVisits.date ?? landerVisits.today) : landerVisits[view];
   const perUserRows = view === "date" ? (perUser.date ?? []) : perUser.tabs;
+
+  // Charts follow the same tab/date filter. Today = hour-wise (24 buckets);
+  // 7d/all slice the full daily series; date = that single day.
+  // xKind drives x-axis tick formatting; xLabels controls tick density
+  // (all-time is too dense to label, so "none").
+  const chart:
+    | { data: DailyPoint[]; xKind: "hour" | "day"; xLabels: "all" | "sparse" | "none" }
+    = view === "today"
+      ? { data: hourly, xKind: "hour", xLabels: "sparse" }
+      : view === "all"
+        ? { data: daily, xKind: "day", xLabels: "none" }
+        : view === "7d"
+          ? { data: daily.slice(-7), xKind: "day", xLabels: "all" }
+          : { data: daily.filter((d) => d.date === (initialDate ?? today)), xKind: "day", xLabels: "all" };
+  const chartLabel =
+    view === "date" ? (initialDate ?? today) : TABS[view];
 
   const kpis = [
     { label: "Total copies", value: current.totalCopies },
@@ -320,9 +338,13 @@ function AnalyticsContent({
         </div>
       </section>
 
-      {/* Trend charts — daily series over the last 30 IST days. Independent of
-          the today/7d/all tabs, which is why they carry their own range label. */}
-      <TrendCharts daily={daily} />
+      {/* Trend charts — series filtered by the active tab/date above. */}
+      <TrendCharts
+        data={chart.data}
+        xKind={chart.xKind}
+        xLabels={chart.xLabels}
+        label={chartLabel}
+      />
 
       {/* Top copied components — ranked list (all time). */}
       <section className={`${card} flex flex-col overflow-hidden`}>
@@ -387,7 +409,7 @@ function AnalyticsContent({
   );
 }
 
-// The five daily metrics rendered as small bar charts. Config is a static list so
+// The five metrics rendered as small line charts. Config is a static list so
 // each chart pulls its own key/label/accent from the shared DailyPoint series.
 const TREND_METRICS: {
   key: keyof Omit<DailyPoint, "date">;
@@ -401,8 +423,20 @@ const TREND_METRICS: {
   { key: "uniqueIps", label: "Unique views per IP", accent: "#ef4444" },
 ];
 
-function TrendCharts({ daily }: { daily: DailyPoint[] }) {
-  const days = daily.length;
+type XKind = "hour" | "day";
+type XLabels = "all" | "sparse" | "none";
+
+function TrendCharts({
+  data,
+  xKind,
+  xLabels,
+  label,
+}: {
+  data: DailyPoint[];
+  xKind: XKind;
+  xLabels: XLabels;
+  label: string;
+}) {
   return (
     <section className={`${card} flex flex-col gap-5 p-6`}>
       <div className="flex items-baseline justify-between">
@@ -410,7 +444,7 @@ function TrendCharts({ daily }: { daily: DailyPoint[] }) {
           Trends
         </h2>
         <span className="text-xs tracking-[-0.03em] text-[#71717b]">
-          {days ? `Last ${days} days` : "No data"}
+          {data.length ? label : "No data"}
         </span>
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -419,7 +453,9 @@ function TrendCharts({ daily }: { daily: DailyPoint[] }) {
             key={m.key}
             label={m.label}
             accent={m.accent}
-            points={daily.map((d) => ({ date: d.date, value: d[m.key] }))}
+            xKind={xKind}
+            xLabels={xLabels}
+            points={data.map((d) => ({ date: d.date, value: d[m.key] }))}
           />
         ))}
       </div>
@@ -427,9 +463,12 @@ function TrendCharts({ daily }: { daily: DailyPoint[] }) {
   );
 }
 
-// "YYYY-MM-DD" → "M/D" for compact x-axis tick labels.
-function fmtDay(ymd: string): string {
-  const [, mo, da] = ymd.split("-");
+// Format an x-axis tick: "YYYY-MM-DD" → "M/D" for days, "HH" → "9a"/"12p" hours.
+function fmtX(key: string, kind: XKind): string {
+  if (kind === "hour") {
+    return `${key.padStart(2, "0")}:00`; // 24-hour, e.g. "16:00"
+  }
+  const [, mo, da] = key.split("-");
   return `${Number(mo)}/${Number(da)}`;
 }
 
@@ -441,10 +480,14 @@ function MiniLineChart({
   label,
   accent,
   points,
+  xKind,
+  xLabels,
 }: {
   label: string;
   accent: string;
   points: { date: string; value: number }[];
+  xKind: XKind;
+  xLabels: XLabels;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const values = points.map((p) => p.value);
@@ -457,9 +500,15 @@ function MiniLineChart({
   const W = 100;
   const H = 40;
   const pad = 2;
+  // Outer viewBox margin so edge points/strokes aren't clipped at the sides/top.
+  const M = 3;
   const n = points.length;
-  // X for point i; single-point series pins to the left so it still renders.
-  const xAt = (i: number) => (n <= 1 ? 0 : (i / (n - 1)) * W);
+  // X for point i; a single-point series (today / one date) centers so its dot
+  // sits mid-chart instead of hugging the edge.
+  const xAt = (i: number) => (n <= 1 ? W / 2 : (i / (n - 1)) * W);
+  // Show a dot on every day only for short windows (today/date/7d); the all-time
+  // series would be too dense, so it's line-only.
+  const showDots = n <= 10;
   const yAt = (v: number) => H - pad - (v / max) * (H - pad * 2);
 
   const line = points.map((p, i) => `${xAt(i)},${yAt(p.value)}`).join(" ");
@@ -494,14 +543,18 @@ function MiniLineChart({
           {(active ? active.value : latest).toLocaleString()}
         </span>
         <span className="pb-0.5 text-[11px] tracking-[-0.03em] text-[#a1a1aa]">
-          {active ? active.date : "today"}
+          {active
+            ? fmtX(active.date, xKind)
+            : xKind === "hour"
+              ? "now"
+              : "latest"}
         </span>
       </div>
       {/* Plot with a date x-axis below. */}
       <div className="flex">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <svg
-            viewBox={`0 0 ${W} ${H}`}
+            viewBox={`${-M} ${-M} ${W + M * 2} ${H + M * 2}`}
             preserveAspectRatio="none"
             className="h-14 w-full"
             role="img"
@@ -525,6 +578,18 @@ function MiniLineChart({
               strokeLinecap="round"
               vectorEffect="non-scaling-stroke"
             />
+            {showDots &&
+              points.map((p, i) => (
+                <circle
+                  key={p.date}
+                  cx={xAt(i)}
+                  cy={yAt(p.value)}
+                  r={1.5}
+                  fill={accent}
+                  opacity={hover == null || hover === i ? 1 : 0.4}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))}
             {active && hover != null && (
               <>
                 <line
@@ -550,17 +615,26 @@ function MiniLineChart({
               </>
             )}
           </svg>
-          {/* X axis — one date tick per day. */}
-          <div className="flex justify-between text-[9px] leading-none tabular-nums text-[#a1a1aa]">
-            {points.map((p, i) => (
-              <span
-                key={p.date}
-                className={hover == null || hover === i ? "" : "opacity-40"}
-              >
-                {fmtDay(p.date)}
-              </span>
-            ))}
-          </div>
+          {/* X axis — dense series ("all") skip labels; "sparse" shows ~6 evenly
+              spaced ticks (hourly today); "all" labels every point (7d / date). */}
+          {xLabels !== "none" && (
+            <div className="flex justify-between text-[9px] leading-none tabular-nums text-[#a1a1aa]">
+              {points.map((p, i) => {
+                const step = Math.max(1, Math.ceil(n / 6));
+                const tick =
+                  xLabels === "all" || i % step === 0 || i === n - 1;
+                const show = tick || hover === i;
+                return (
+                  <span
+                    key={p.date}
+                    className={hover == null || hover === i ? "" : "opacity-40"}
+                  >
+                    {show ? fmtX(p.date, xKind) : ""}
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

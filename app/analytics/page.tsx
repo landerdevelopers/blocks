@@ -109,27 +109,27 @@ const getCachedOverview = unstable_cache(
   async (today: string, start7: string) => {
     const admin = createAdminClient();
     const tomorrow = addDays(today, 1); // exclusive upper bound (00:00 IST next day)
-    const dailyFrom = addDays(today, -6); // 7-day trend window (inclusive)
-    const [windowsRes, top10Res, dailyRes, lToday, l7d, lAll] = await Promise.all([
-      admin.rpc("get_analytics_windows", {
-        d_today: today,
-        d_start7: start7,
-      }),
-      admin
-        .from("components")
-        .select("id, category, copy_count, preview_url")
-        .order("copy_count", { ascending: false })
-        .limit(10),
-      // Per-day trend series for the charts (last 7 IST days).
-      admin.rpc("get_analytics_daily", {
-        d_from: dailyFrom,
-        d_to: today,
-      }),
-      // Lander visits windowed like the other metrics: today / last-7-days / all.
-      countLander(admin, today, tomorrow),
-      countLander(admin, start7, tomorrow),
-      countLander(admin, null, null),
-    ]);
+    const [windowsRes, top10Res, dailyRes, hourlyRes, lToday, l7d, lAll] =
+      await Promise.all([
+        admin.rpc("get_analytics_windows", {
+          d_today: today,
+          d_start7: start7,
+        }),
+        admin
+          .from("components")
+          .select("id, category, copy_count, preview_url")
+          .order("copy_count", { ascending: false })
+          .limit(10),
+        // Full per-day trend series (earliest activity → today). The client slices
+        // it to the selected tab window (7d / all / picked date).
+        admin.rpc("get_analytics_daily", { d_to: today }),
+        // Hourly buckets for today — the "Today" trend view is hour-wise.
+        admin.rpc("get_analytics_hourly", { d_day: today }),
+        // Lander visits windowed like the other metrics: today / last-7-days / all.
+        countLander(admin, today, tomorrow),
+        countLander(admin, start7, tomorrow),
+        countLander(admin, null, null),
+      ]);
     const w = (windowsRes.data ?? {}) as Record<string, RawWindow | null>;
     const topComponents: TopComponent[] = (top10Res.data ?? []).map((c) => ({
       id: c.id as string,
@@ -137,16 +137,17 @@ const getCachedOverview = unstable_cache(
       copy_count: (c.copy_count as number) ?? 0,
       preview_url: (c.preview_url as string) ?? null,
     }));
-    const daily: DailyPoint[] = ((dailyRes.data as DailyPoint[] | null) ?? []).map(
-      (d) => ({
+    const normPoints = (rows: DailyPoint[] | null): DailyPoint[] =>
+      (rows ?? []).map((d) => ({
         date: d.date,
         newSignups: Number(d.newSignups ?? 0),
         activeUsers: Number(d.activeUsers ?? 0),
         copies: Number(d.copies ?? 0),
         uniqueCopiers: Number(d.uniqueCopiers ?? 0),
         uniqueIps: Number(d.uniqueIps ?? 0),
-      }),
-    );
+      }));
+    const daily = normPoints(dailyRes.data as DailyPoint[] | null);
+    const hourly = normPoints(hourlyRes.data as DailyPoint[] | null);
     return {
       stats: {
         today: toStats(w.today),
@@ -155,12 +156,13 @@ const getCachedOverview = unstable_cache(
       },
       topComponents,
       daily,
+      hourly,
       landerVisits: { today: lToday, "7d": l7d, all: lAll },
     };
   },
   // Bump the version suffix whenever the cached shape changes (e.g. dau added) so
   // stale entries from a prior deploy don't surface fields the new code expects.
-  ["analytics-overview-v4"],
+  ["analytics-overview-v5"],
   // Tagged so the in-page Refresh button can bust it on demand (revalidateTag).
   // The 5-min window is just a safety net behind that manual refresh; the cache
   // key already includes `today`, so it rolls over on its own at the IST date
@@ -277,6 +279,7 @@ async function loadAnalytics(
     },
     topComponents: overview.topComponents,
     daily: overview.daily,
+    hourly: overview.hourly,
     landerVisits: {
       today: overview.landerVisits.today,
       "7d": overview.landerVisits["7d"],
