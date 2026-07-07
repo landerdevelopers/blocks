@@ -1,7 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, use, useState, useTransition } from "react";
+import {
+  Suspense,
+  use,
+  useState,
+  useTransition,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 import { cloudflareThumb } from "@/lib/utils";
@@ -43,12 +49,25 @@ export type TopComponent = {
   preview_url: string | null;
 };
 
+// One IST calendar day of trend data — powers the charts above the top-copied
+// list. Oldest→newest, gap-filled with zeros by the get_analytics_daily RPC.
+export type DailyPoint = {
+  date: string; // YYYY-MM-DD (IST)
+  newSignups: number;
+  activeUsers: number;
+  copies: number;
+  uniqueCopiers: number;
+  uniqueIps: number;
+};
+
 // Everything the page streams in after the shell paints. Passed as a promise so
 // the chrome (title/tabs/date picker) renders instantly and the heavy reads show
 // skeletons until they resolve.
 export type AnalyticsData = {
   stats: { today: Stats; "7d": Stats; all: Stats; date: Stats | null };
   topComponents: TopComponent[];
+  // Per-day trend series (last 30 IST days) for the charts.
+  daily: DailyPoint[];
   // Lander Studio visits windowed like the KPIs (date is null unless a day picked).
   landerVisits: { today: number; "7d": number; all: number; date: number | null };
   perUser: { tabs: PerUserRow[]; date: PerUserRow[] | null };
@@ -205,7 +224,7 @@ function AnalyticsContent({
   today: string;
   initialDate: string | null;
 }) {
-  const { stats, topComponents, landerVisits, perUser, categoryById } =
+  const { stats, topComponents, daily, landerVisits, perUser, categoryById } =
     use(dataPromise);
 
   const current: Stats =
@@ -248,12 +267,12 @@ function AnalyticsContent({
 
       {/* Lander visits + Copies by category, same row. */}
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]">
-        {/* Lander Studio visits — black card. */}
-        <div className="flex flex-col justify-center gap-1 rounded-2xl bg-[#09090b] px-7 py-4 text-white lg:min-w-60">
-          <span className="text-xs tracking-[-0.03em] text-white/55">
+        {/* Lander Studio visits — white card, matches the KPI/category cards. */}
+        <div className={`${card} flex flex-col justify-center gap-1 px-7 py-4 lg:min-w-60`}>
+          <span className="text-xs tracking-[-0.03em] text-[#71717b]">
             Lander Studio visits
           </span>
-          <span className="text-[28px] font-semibold leading-none tracking-[-0.04em] tabular-nums">
+          <span className="text-[28px] font-semibold leading-none tracking-[-0.04em] tabular-nums text-[#09090b]">
             {landerNow.toLocaleString()}
           </span>
         </div>
@@ -300,6 +319,10 @@ function AnalyticsContent({
           </div>
         </div>
       </section>
+
+      {/* Trend charts — daily series over the last 30 IST days. Independent of
+          the today/7d/all tabs, which is why they carry their own range label. */}
+      <TrendCharts daily={daily} />
 
       {/* Top copied components — ranked list (all time). */}
       <section className={`${card} flex flex-col overflow-hidden`}>
@@ -364,6 +387,186 @@ function AnalyticsContent({
   );
 }
 
+// The five daily metrics rendered as small bar charts. Config is a static list so
+// each chart pulls its own key/label/accent from the shared DailyPoint series.
+const TREND_METRICS: {
+  key: keyof Omit<DailyPoint, "date">;
+  label: string;
+  accent: string;
+}[] = [
+  { key: "newSignups", label: "New signups", accent: "#2974ff" },
+  { key: "activeUsers", label: "Unique active users", accent: "#7c5cff" },
+  { key: "copies", label: "Copy count", accent: "#12b981" },
+  { key: "uniqueCopiers", label: "Unique copied accounts", accent: "#f59e0b" },
+  { key: "uniqueIps", label: "Unique views per IP", accent: "#ef4444" },
+];
+
+function TrendCharts({ daily }: { daily: DailyPoint[] }) {
+  const days = daily.length;
+  return (
+    <section className={`${card} flex flex-col gap-5 p-6`}>
+      <div className="flex items-baseline justify-between">
+        <h2 className="text-[15px] font-semibold tracking-[-0.03em] text-[#09090b]">
+          Trends
+        </h2>
+        <span className="text-xs tracking-[-0.03em] text-[#71717b]">
+          {days ? `Last ${days} days` : "No data"}
+        </span>
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {TREND_METRICS.map((m) => (
+          <MiniLineChart
+            key={m.key}
+            label={m.label}
+            accent={m.accent}
+            points={daily.map((d) => ({ date: d.date, value: d[m.key] }))}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// "YYYY-MM-DD" → "M/D" for compact x-axis tick labels.
+function fmtDay(ymd: string): string {
+  const [, mo, da] = ymd.split("-");
+  return `${Number(mo)}/${Number(da)}`;
+}
+
+// A dependency-free SVG line chart for one daily metric. The line + soft area
+// fill scale to the series max; hovering a day shows its date + value with a
+// marker + guide line. The header shows the window total and the hovered (or
+// latest) day's value. viewBox lets it flex to the card width.
+function MiniLineChart({
+  label,
+  accent,
+  points,
+}: {
+  label: string;
+  accent: string;
+  points: { date: string; value: number }[];
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const values = points.map((p) => p.value);
+  const max = Math.max(1, ...values);
+  const total = values.reduce((s, v) => s + v, 0);
+  const latest = values[values.length - 1] ?? 0;
+  const active = hover != null ? points[hover] : null;
+
+  // Fixed viewBox; a small vertical pad keeps the line off the top/bottom edges.
+  const W = 100;
+  const H = 40;
+  const pad = 2;
+  const n = points.length;
+  // X for point i; single-point series pins to the left so it still renders.
+  const xAt = (i: number) => (n <= 1 ? 0 : (i / (n - 1)) * W);
+  const yAt = (v: number) => H - pad - (v / max) * (H - pad * 2);
+
+  const line = points.map((p, i) => `${xAt(i)},${yAt(p.value)}`).join(" ");
+  const area =
+    n > 0
+      ? `${xAt(0)},${H} ` +
+        points.map((p, i) => `${xAt(i)},${yAt(p.value)}`).join(" ") +
+        ` ${xAt(n - 1)},${H}`
+      : "";
+  const gradId = `grad-${label.replace(/\W/g, "")}`;
+
+  // Nearest-point hover: map the pointer's x (0..1 of width) to an index.
+  const onMove = (e: ReactMouseEvent<SVGSVGElement>) => {
+    if (n === 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const frac = (e.clientX - rect.left) / rect.width;
+    setHover(Math.max(0, Math.min(n - 1, Math.round(frac * (n - 1)))));
+  };
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border border-[#eef0f2] bg-[#fafafa] p-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[13px] tracking-[-0.03em] text-[#71717b]">
+          {label}
+        </span>
+        <span className="text-xs tabular-nums text-[#a1a1aa]">
+          {total.toLocaleString()} total
+        </span>
+      </div>
+      <div className="flex items-end gap-2">
+        <span className="text-[26px] font-semibold leading-none tracking-[-0.04em] tabular-nums text-[#09090b]">
+          {(active ? active.value : latest).toLocaleString()}
+        </span>
+        <span className="pb-0.5 text-[11px] tracking-[-0.03em] text-[#a1a1aa]">
+          {active ? active.date : "today"}
+        </span>
+      </div>
+      {/* Plot with a date x-axis below. */}
+      <div className="flex">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            preserveAspectRatio="none"
+            className="h-14 w-full"
+            role="img"
+            aria-label={`${label} — daily trend`}
+            onMouseMove={onMove}
+            onMouseLeave={() => setHover(null)}
+          >
+            <defs>
+              <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={accent} stopOpacity={0.22} />
+                <stop offset="100%" stopColor={accent} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            {area && <polygon points={area} fill={`url(#${gradId})`} />}
+            <polyline
+              points={line}
+              fill="none"
+              stroke={accent}
+              strokeWidth={1.4}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              vectorEffect="non-scaling-stroke"
+            />
+            {active && hover != null && (
+              <>
+                <line
+                  x1={xAt(hover)}
+                  y1={0}
+                  x2={xAt(hover)}
+                  y2={H}
+                  stroke={accent}
+                  strokeWidth={0.5}
+                  strokeDasharray="1.5 1.5"
+                  opacity={0.5}
+                  vectorEffect="non-scaling-stroke"
+                />
+                <circle
+                  cx={xAt(hover)}
+                  cy={yAt(active.value)}
+                  r={2}
+                  fill={accent}
+                  stroke="#fafafa"
+                  strokeWidth={1}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </>
+            )}
+          </svg>
+          {/* X axis — one date tick per day. */}
+          <div className="flex justify-between text-[9px] leading-none tabular-nums text-[#a1a1aa]">
+            {points.map((p, i) => (
+              <span
+                key={p.date}
+                className={hover == null || hover === i ? "" : "opacity-40"}
+              >
+                {fmtDay(p.date)}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Skeleton placeholders for the streamed sections — same frames/sizes as the
 // real content so the layout doesn't shift when data lands.
 function AnalyticsSkeleton() {
@@ -381,9 +584,9 @@ function AnalyticsSkeleton() {
 
       {/* Lander + category */}
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]">
-        <div className="flex flex-col justify-center gap-2 rounded-2xl bg-[#09090b] px-5 py-4">
-          <div className="h-3 w-32 animate-pulse rounded-md bg-white/20" />
-          <div className="h-6 w-20 animate-pulse rounded-md bg-white/20" />
+        <div className={`${card} flex flex-col justify-center gap-2 px-5 py-4`}>
+          <div className={`${skel} h-3 w-32`} />
+          <div className={`${skel} h-6 w-20`} />
         </div>
         <div className={`${card} flex flex-col gap-3.5 p-5`}>
           <div className={`${skel} h-4 w-36`} />
@@ -392,6 +595,26 @@ function AnalyticsSkeleton() {
               <div key={i} className={`${skel} h-8 w-28 rounded-full`} />
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* Trend charts */}
+      <section className={`${card} flex flex-col gap-5 p-6`}>
+        <div className="flex items-baseline justify-between">
+          <div className={`${skel} h-4 w-20`} />
+          <div className={`${skel} h-3 w-16`} />
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div
+              key={i}
+              className="flex flex-col gap-2.5 rounded-xl border border-[#eef0f2] bg-[#fafafa] p-4"
+            >
+              <div className={`${skel} h-3 w-28`} />
+              <div className={`${skel} h-6 w-16`} />
+              <div className={`${skel} h-14 w-full`} />
+            </div>
+          ))}
         </div>
       </section>
 

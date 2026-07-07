@@ -1978,6 +1978,79 @@ grant execute on function public.get_analytics_windows(date, date, date) to serv
 revoke execute on function public.get_analytics_windows(date, date, date)
   from public, anon, authenticated;
 
+-- get_analytics_daily(d_from, d_to) — one row per IST calendar day in the
+-- inclusive [d_from, d_to] window (gap-filled with zeros via generate_series), as
+-- a JSON array ordered oldest→newest. Powers the analytics trend charts. Each
+-- element: date, newSignups (profiles created that day), activeUsers (distinct
+-- users who copied OR logged in), copies (copy_events), uniqueCopiers (distinct
+-- copiers), uniqueIps (distinct IPs that copied — the only per-IP signal we
+-- record, in ip_copy_counts). All day bucketing is IST. Computed in-DB so no raw
+-- rows reach JS.
+create or replace function public.get_analytics_daily(
+  d_from date,
+  d_to   date
+)
+returns jsonb
+language sql
+stable
+as $$
+  with days as (
+    select d::date as day
+    from generate_series(d_from, d_to, interval '1 day') as g(d)
+  ),
+  signups as (
+    select (p.created_at at time zone 'Asia/Kolkata')::date as day, count(*) as n
+    from public.profiles p
+    where (p.created_at at time zone 'Asia/Kolkata')::date between d_from and d_to
+    group by 1
+  ),
+  copies as (
+    select ce.date as day,
+           count(*)                   as copies,
+           count(distinct ce.user_id) as uniq_copiers
+    from public.copy_events ce
+    where ce.date between d_from and d_to
+    group by 1
+  ),
+  active as (
+    select day, count(distinct user_id) as n
+    from (
+      select user_id, date as day from public.copy_events
+      where date between d_from and d_to and user_id is not null
+      union all
+      select user_id, date as day from public.login_events
+      where date between d_from and d_to and user_id is not null
+    ) a
+    group by 1
+  ),
+  ips as (
+    select day, count(distinct ip) as n
+    from public.ip_copy_counts
+    where day between d_from and d_to
+    group by 1
+  )
+  select coalesce(jsonb_agg(
+    jsonb_build_object(
+      'date',          to_char(days.day, 'YYYY-MM-DD'),
+      'newSignups',    coalesce(signups.n, 0),
+      'activeUsers',   coalesce(active.n, 0),
+      'copies',        coalesce(copies.copies, 0),
+      'uniqueCopiers', coalesce(copies.uniq_copiers, 0),
+      'uniqueIps',     coalesce(ips.n, 0)
+    ) order by days.day
+  ), '[]'::jsonb)
+  from days
+  left join signups on signups.day = days.day
+  left join copies  on copies.day  = days.day
+  left join active  on active.day  = days.day
+  left join ips     on ips.day     = days.day;
+$$;
+-- Admin-only: lock to the service-role client (analytics page). Grant first,
+-- then revoke the default PUBLIC access.
+grant execute on function public.get_analytics_daily(date, date) to service_role;
+revoke execute on function public.get_analytics_daily(date, date)
+  from public, anon, authenticated;
+
 -- ---------------------------------------------------------------------------
 -- get_component_detail(p_id) — one component (NO figma_data) joined with its
 -- creator's public profile, in a single call. Drives the component detail view.

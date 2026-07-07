@@ -5,6 +5,7 @@ import AnalyticsView, {
   type Stats,
   type PerUserRow,
   type TopComponent,
+  type DailyPoint,
   type AnalyticsData,
 } from "./AnalyticsView";
 
@@ -108,7 +109,8 @@ const getCachedOverview = unstable_cache(
   async (today: string, start7: string) => {
     const admin = createAdminClient();
     const tomorrow = addDays(today, 1); // exclusive upper bound (00:00 IST next day)
-    const [windowsRes, top10Res, lToday, l7d, lAll] = await Promise.all([
+    const dailyFrom = addDays(today, -6); // 7-day trend window (inclusive)
+    const [windowsRes, top10Res, dailyRes, lToday, l7d, lAll] = await Promise.all([
       admin.rpc("get_analytics_windows", {
         d_today: today,
         d_start7: start7,
@@ -118,6 +120,11 @@ const getCachedOverview = unstable_cache(
         .select("id, category, copy_count, preview_url")
         .order("copy_count", { ascending: false })
         .limit(10),
+      // Per-day trend series for the charts (last 7 IST days).
+      admin.rpc("get_analytics_daily", {
+        d_from: dailyFrom,
+        d_to: today,
+      }),
       // Lander visits windowed like the other metrics: today / last-7-days / all.
       countLander(admin, today, tomorrow),
       countLander(admin, start7, tomorrow),
@@ -130,6 +137,16 @@ const getCachedOverview = unstable_cache(
       copy_count: (c.copy_count as number) ?? 0,
       preview_url: (c.preview_url as string) ?? null,
     }));
+    const daily: DailyPoint[] = ((dailyRes.data as DailyPoint[] | null) ?? []).map(
+      (d) => ({
+        date: d.date,
+        newSignups: Number(d.newSignups ?? 0),
+        activeUsers: Number(d.activeUsers ?? 0),
+        copies: Number(d.copies ?? 0),
+        uniqueCopiers: Number(d.uniqueCopiers ?? 0),
+        uniqueIps: Number(d.uniqueIps ?? 0),
+      }),
+    );
     return {
       stats: {
         today: toStats(w.today),
@@ -137,12 +154,13 @@ const getCachedOverview = unstable_cache(
         all: toStats(w.all),
       },
       topComponents,
+      daily,
       landerVisits: { today: lToday, "7d": l7d, all: lAll },
     };
   },
   // Bump the version suffix whenever the cached shape changes (e.g. dau added) so
   // stale entries from a prior deploy don't surface fields the new code expects.
-  ["analytics-overview-v3"],
+  ["analytics-overview-v4"],
   // Tagged so the in-page Refresh button can bust it on demand (revalidateTag).
   // The 5-min window is just a safety net behind that manual refresh; the cache
   // key already includes `today`, so it rolls over on its own at the IST date
@@ -258,6 +276,7 @@ async function loadAnalytics(
       date: statDate,
     },
     topComponents: overview.topComponents,
+    daily: overview.daily,
     landerVisits: {
       today: overview.landerVisits.today,
       "7d": overview.landerVisits["7d"],
