@@ -145,6 +145,10 @@ const getCachedOverview = unstable_cache(
         copies: Number(d.copies ?? 0),
         uniqueCopiers: Number(d.uniqueCopiers ?? 0),
         uniqueIps: Number(d.uniqueIps ?? 0),
+        creatorsApplied: Number(d.creatorsApplied ?? 0),
+        designsSubmitted: Number(d.designsSubmitted ?? 0),
+        designsApproved: Number(d.designsApproved ?? 0),
+        designsRejected: Number(d.designsRejected ?? 0),
       }));
     const daily = normPoints(dailyRes.data as DailyPoint[] | null);
     const hourly = normPoints(hourlyRes.data as DailyPoint[] | null);
@@ -162,7 +166,7 @@ const getCachedOverview = unstable_cache(
   },
   // Bump the version suffix whenever the cached shape changes (e.g. dau added) so
   // stale entries from a prior deploy don't surface fields the new code expects.
-  ["analytics-overview-v5"],
+  ["analytics-overview-v6"],
   // Tagged so the in-page Refresh button can bust it on demand (revalidateTag).
   // The 5-min window is just a safety net behind that manual refresh; the cache
   // key already includes `today`, so it rolls over on its own at the IST date

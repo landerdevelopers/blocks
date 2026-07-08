@@ -58,6 +58,11 @@ export type DailyPoint = {
   copies: number;
   uniqueCopiers: number;
   uniqueIps: number;
+  creatorsApplied: number;
+  // Designs bucketed by submission day; approved/rejected are current status.
+  designsSubmitted: number;
+  designsApproved: number;
+  designsRejected: number;
 };
 
 // Everything the page streams in after the shell paints. Passed as a promise so
@@ -421,6 +426,19 @@ const TREND_METRICS: {
   { key: "copies", label: "Copy count", accent: "#12b981" },
   { key: "uniqueCopiers", label: "Unique copied accounts", accent: "#f59e0b" },
   { key: "uniqueIps", label: "Unique views per IP", accent: "#ef4444" },
+  { key: "creatorsApplied", label: "New creators applied", accent: "#0ea5e9" },
+];
+
+// Designs chart is multi-series (submitted / approved / rejected), so it's
+// configured separately from the single-metric grid above.
+const DESIGN_SERIES: {
+  key: keyof Omit<DailyPoint, "date">;
+  label: string;
+  accent: string;
+}[] = [
+  { key: "designsSubmitted", label: "Submitted", accent: "#2974ff" },
+  { key: "designsApproved", label: "Approved", accent: "#12b981" },
+  { key: "designsRejected", label: "Rejected", accent: "#ef4444" },
 ];
 
 type XKind = "hour" | "day";
@@ -459,6 +477,19 @@ function TrendCharts({
           />
         ))}
       </div>
+
+      {/* Designs — submitted / approved / rejected, one multi-line chart. */}
+      <MultiLineChart
+        label="Designs (submitted · approved · rejected)"
+        xKind={xKind}
+        xLabels={xLabels}
+        dates={data.map((d) => d.date)}
+        series={DESIGN_SERIES.map((s) => ({
+          label: s.label,
+          accent: s.accent,
+          values: data.map((d) => d[s.key]),
+        }))}
+      />
     </section>
   );
 }
@@ -553,45 +584,33 @@ function MiniLineChart({
       {/* Plot with a date x-axis below. */}
       <div className="flex">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <svg
-            viewBox={`${-M} ${-M} ${W + M * 2} ${H + M * 2}`}
-            preserveAspectRatio="none"
-            className="h-14 w-full"
-            role="img"
-            aria-label={`${label} — daily trend`}
-            onMouseMove={onMove}
-            onMouseLeave={() => setHover(null)}
-          >
-            <defs>
-              <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={accent} stopOpacity={0.22} />
-                <stop offset="100%" stopColor={accent} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            {area && <polygon points={area} fill={`url(#${gradId})`} />}
-            <polyline
-              points={line}
-              fill="none"
-              stroke={accent}
-              strokeWidth={1.4}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              vectorEffect="non-scaling-stroke"
-            />
-            {showDots &&
-              points.map((p, i) => (
-                <circle
-                  key={p.date}
-                  cx={xAt(i)}
-                  cy={yAt(p.value)}
-                  r={1.5}
-                  fill={accent}
-                  opacity={hover == null || hover === i ? 1 : 0.4}
-                  vectorEffect="non-scaling-stroke"
-                />
-              ))}
-            {active && hover != null && (
-              <>
+          <div className="relative h-14 w-full">
+            <svg
+              viewBox={`${-M} ${-M} ${W + M * 2} ${H + M * 2}`}
+              preserveAspectRatio="none"
+              className="h-full w-full"
+              role="img"
+              aria-label={`${label} — daily trend`}
+              onMouseMove={onMove}
+              onMouseLeave={() => setHover(null)}
+            >
+              <defs>
+                <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={accent} stopOpacity={0.22} />
+                  <stop offset="100%" stopColor={accent} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              {area && <polygon points={area} fill={`url(#${gradId})`} />}
+              <polyline
+                points={line}
+                fill="none"
+                stroke={accent}
+                strokeWidth={1.4}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                vectorEffect="non-scaling-stroke"
+              />
+              {active && hover != null && (
                 <line
                   x1={xAt(hover)}
                   y1={0}
@@ -603,18 +622,34 @@ function MiniLineChart({
                   opacity={0.5}
                   vectorEffect="non-scaling-stroke"
                 />
-                <circle
-                  cx={xAt(hover)}
-                  cy={yAt(active.value)}
-                  r={2}
-                  fill={accent}
-                  stroke="#fafafa"
-                  strokeWidth={1}
-                  vectorEffect="non-scaling-stroke"
+              )}
+            </svg>
+            {/* Dots as an HTML overlay so they stay round (the stretched SVG
+                would squash <circle> into ovals). */}
+            {showDots &&
+              points.map((p, i) => (
+                <span
+                  key={p.date}
+                  className="pointer-events-none absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                  style={{
+                    backgroundColor: accent,
+                    opacity: hover == null || hover === i ? 1 : 0.4,
+                    left: `${((xAt(i) + M) / (W + M * 2)) * 100}%`,
+                    top: `${((yAt(p.value) + M) / (H + M * 2)) * 100}%`,
+                  }}
                 />
-              </>
+              ))}
+            {active && hover != null && (
+              <span
+                className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-[#fafafa]"
+                style={{
+                  backgroundColor: accent,
+                  left: `${((xAt(hover) + M) / (W + M * 2)) * 100}%`,
+                  top: `${((yAt(active.value) + M) / (H + M * 2)) * 100}%`,
+                }}
+              />
             )}
-          </svg>
+          </div>
           {/* X axis — dense series ("all") skip labels; "sparse" shows ~6 evenly
               spaced ticks (hourly today); "all" labels every point (7d / date). */}
           {xLabels !== "none" && (
@@ -630,6 +665,154 @@ function MiniLineChart({
                     className={hover == null || hover === i ? "" : "opacity-40"}
                   >
                     {show ? fmtX(p.date, xKind) : ""}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// A dependency-free multi-series SVG line chart (shared y-scale across series).
+// Legend shows each series' total, or its value at the hovered point. Used for
+// the designs submitted/approved/rejected breakdown.
+function MultiLineChart({
+  label,
+  xKind,
+  xLabels,
+  dates,
+  series,
+}: {
+  label: string;
+  xKind: XKind;
+  xLabels: XLabels;
+  dates: string[];
+  series: { label: string; accent: string; values: number[] }[];
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const n = dates.length;
+  const max = Math.max(1, ...series.flatMap((s) => s.values));
+
+  const W = 100;
+  const H = 40;
+  const pad = 2;
+  const M = 3;
+  const xAt = (i: number) => (n <= 1 ? W / 2 : (i / (n - 1)) * W);
+  const yAt = (v: number) => H - pad - (v / max) * (H - pad * 2);
+
+  const onMove = (e: ReactMouseEvent<SVGSVGElement>) => {
+    if (n === 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const frac = (e.clientX - rect.left) / rect.width;
+    setHover(Math.max(0, Math.min(n - 1, Math.round(frac * (n - 1)))));
+  };
+
+  const activeDate = hover != null ? dates[hover] : null;
+
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-[#eef0f2] bg-[#fafafa] p-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[13px] tracking-[-0.03em] text-[#71717b]">
+          {label}
+        </span>
+        <span className="text-sm font-medium tracking-[-0.03em] text-[#09090b]">
+          {activeDate
+            ? fmtX(activeDate, xKind)
+            : xKind === "hour"
+              ? "now"
+              : "latest"}
+        </span>
+      </div>
+      {/* Legend — per-series colour + total (or hovered value). */}
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {series.map((s) => {
+          const total = s.values.reduce((a, b) => a + b, 0);
+          const val = hover != null ? (s.values[hover] ?? 0) : total;
+          return (
+            <span key={s.label} className="flex items-center gap-1.5">
+              <span
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: s.accent }}
+              />
+              <span className="text-[12px] tracking-[-0.03em] text-[#52525b]">
+                {s.label}
+              </span>
+              <span className="text-[13px] font-semibold tabular-nums text-[#09090b]">
+                {val.toLocaleString()}
+              </span>
+            </span>
+          );
+        })}
+      </div>
+      <div className="flex">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="relative h-20 w-full">
+            <svg
+              viewBox={`${-M} ${-M} ${W + M * 2} ${H + M * 2}`}
+              preserveAspectRatio="none"
+              className="h-full w-full"
+              role="img"
+              aria-label={`${label} — trend`}
+              onMouseMove={onMove}
+              onMouseLeave={() => setHover(null)}
+            >
+              {hover != null && (
+                <line
+                  x1={xAt(hover)}
+                  y1={0}
+                  x2={xAt(hover)}
+                  y2={H}
+                  stroke="#a1a1aa"
+                  strokeWidth={0.5}
+                  strokeDasharray="1.5 1.5"
+                  opacity={0.6}
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
+              {series.map((s) => (
+                <polyline
+                  key={s.label}
+                  points={s.values.map((v, i) => `${xAt(i)},${yAt(v)}`).join(" ")}
+                  fill="none"
+                  stroke={s.accent}
+                  strokeWidth={1.4}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))}
+            </svg>
+            {/* Hover dots as an HTML overlay so they stay perfectly round (the
+                stretched SVG would squash <circle> into ovals). */}
+            {hover != null &&
+              series.map((s) => (
+                <span
+                  key={`h-${s.label}`}
+                  className="pointer-events-none absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-[#fafafa]"
+                  style={{
+                    backgroundColor: s.accent,
+                    left: `${((xAt(hover) + M) / (W + M * 2)) * 100}%`,
+                    top: `${((yAt(s.values[hover] ?? 0) + M) / (H + M * 2)) * 100}%`,
+                  }}
+                />
+              ))}
+          </div>
+          {xLabels !== "none" && (
+            <div className="flex justify-between text-[9px] leading-none tabular-nums text-[#a1a1aa]">
+              {dates.map((d, i) => {
+                const step = Math.max(1, Math.ceil(n / 6));
+                const tick =
+                  xLabels === "all" || i % step === 0 || i === n - 1;
+                const show = tick || hover === i;
+                return (
+                  <span
+                    key={d}
+                    className={hover == null || hover === i ? "" : "opacity-40"}
+                  >
+                    {show ? fmtX(d, xKind) : ""}
                   </span>
                 );
               })}
@@ -679,7 +862,7 @@ function AnalyticsSkeleton() {
           <div className={`${skel} h-3 w-16`} />
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 5 }).map((_, i) => (
+          {Array.from({ length: 6 }).map((_, i) => (
             <div
               key={i}
               className="flex flex-col gap-2.5 rounded-xl border border-[#eef0f2] bg-[#fafafa] p-4"
@@ -689,6 +872,11 @@ function AnalyticsSkeleton() {
               <div className={`${skel} h-14 w-full`} />
             </div>
           ))}
+        </div>
+        <div className="flex flex-col gap-3 rounded-xl border border-[#eef0f2] bg-[#fafafa] p-4">
+          <div className={`${skel} h-3 w-64`} />
+          <div className={`${skel} h-4 w-48`} />
+          <div className={`${skel} h-20 w-full`} />
         </div>
       </section>
 

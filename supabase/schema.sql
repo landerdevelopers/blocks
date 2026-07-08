@@ -2047,22 +2047,45 @@ as $$
     from public.ip_copy_counts ic, bounds
     where ic.day between bounds.lo and bounds.hi
     group by 1
+  ),
+  apps as (
+    select (ca.created_at at time zone 'Asia/Kolkata')::date as day, count(*) as n
+    from public.creator_applications ca, bounds
+    where (ca.created_at at time zone 'Asia/Kolkata')::date between bounds.lo and bounds.hi
+    group by 1
+  ),
+  -- Designs bucketed by SUBMISSION day, split by current status (components have
+  -- no approved_at/rejected_at, so approved/rejected reflect present state).
+  designs as (
+    select (c.created_at at time zone 'Asia/Kolkata')::date as day,
+           count(*)                                          as submitted,
+           count(*) filter (where c.status = 'approved')     as approved,
+           count(*) filter (where c.status = 'rejected')     as rejected
+    from public.components c, bounds
+    where (c.created_at at time zone 'Asia/Kolkata')::date between bounds.lo and bounds.hi
+    group by 1
   )
   select coalesce(jsonb_agg(
     jsonb_build_object(
-      'date',          to_char(days.day, 'YYYY-MM-DD'),
-      'newSignups',    coalesce(signups.n, 0),
-      'activeUsers',   coalesce(active.n, 0),
-      'copies',        coalesce(copies.copies, 0),
-      'uniqueCopiers', coalesce(copies.uniq_copiers, 0),
-      'uniqueIps',     coalesce(ips.n, 0)
+      'date',             to_char(days.day, 'YYYY-MM-DD'),
+      'newSignups',       coalesce(signups.n, 0),
+      'activeUsers',      coalesce(active.n, 0),
+      'copies',           coalesce(copies.copies, 0),
+      'uniqueCopiers',    coalesce(copies.uniq_copiers, 0),
+      'uniqueIps',        coalesce(ips.n, 0),
+      'creatorsApplied',  coalesce(apps.n, 0),
+      'designsSubmitted', coalesce(designs.submitted, 0),
+      'designsApproved',  coalesce(designs.approved, 0),
+      'designsRejected',  coalesce(designs.rejected, 0)
     ) order by days.day
   ), '[]'::jsonb)
   from days
   left join signups on signups.day = days.day
   left join copies  on copies.day  = days.day
   left join active  on active.day  = days.day
-  left join ips     on ips.day     = days.day;
+  left join ips     on ips.day     = days.day
+  left join apps    on apps.day    = days.day
+  left join designs on designs.day = days.day;
 $$;
 -- Admin-only: lock to the service-role client (analytics page). Grant first,
 -- then revoke the default PUBLIC access.
@@ -2113,21 +2136,43 @@ as $$
         and le.user_id is not null
     ) a
     group by 1
+  ),
+  apps as (
+    select extract(hour from (ca.created_at at time zone 'Asia/Kolkata'))::int as hr,
+           count(*) as n
+    from public.creator_applications ca
+    where (ca.created_at at time zone 'Asia/Kolkata')::date = d_day
+    group by 1
+  ),
+  designs as (
+    select extract(hour from (c.created_at at time zone 'Asia/Kolkata'))::int as hr,
+           count(*)                                       as submitted,
+           count(*) filter (where c.status = 'approved')  as approved,
+           count(*) filter (where c.status = 'rejected')  as rejected
+    from public.components c
+    where (c.created_at at time zone 'Asia/Kolkata')::date = d_day
+    group by 1
   )
   select coalesce(jsonb_agg(
     jsonb_build_object(
-      'date',          lpad(hours.hr::text, 2, '0'),
-      'newSignups',    coalesce(signups.n, 0),
-      'activeUsers',   coalesce(active.n, 0),
-      'copies',        coalesce(copies.copies, 0),
-      'uniqueCopiers', coalesce(copies.uniq_copiers, 0),
-      'uniqueIps',     coalesce(copies.uniq_ips, 0)
+      'date',             lpad(hours.hr::text, 2, '0'),
+      'newSignups',       coalesce(signups.n, 0),
+      'activeUsers',      coalesce(active.n, 0),
+      'copies',           coalesce(copies.copies, 0),
+      'uniqueCopiers',    coalesce(copies.uniq_copiers, 0),
+      'uniqueIps',        coalesce(copies.uniq_ips, 0),
+      'creatorsApplied',  coalesce(apps.n, 0),
+      'designsSubmitted', coalesce(designs.submitted, 0),
+      'designsApproved',  coalesce(designs.approved, 0),
+      'designsRejected',  coalesce(designs.rejected, 0)
     ) order by hours.hr
   ), '[]'::jsonb)
   from hours
   left join signups on signups.hr = hours.hr
   left join copies  on copies.hr  = hours.hr
-  left join active  on active.hr  = hours.hr;
+  left join active  on active.hr  = hours.hr
+  left join apps    on apps.hr    = hours.hr
+  left join designs on designs.hr = hours.hr;
 $$;
 grant execute on function public.get_analytics_hourly(date) to service_role;
 revoke execute on function public.get_analytics_hourly(date)
