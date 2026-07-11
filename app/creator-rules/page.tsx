@@ -102,7 +102,7 @@ export default function CreatorRulesPage() {
             After submission, our team will review your design and either
             approve or reject it within 24 hours.
           </P>
-          <P>Creators can submit up to 30 designs per day.</P>
+          <P>Creators can submit up to 50 designs per day.</P>
           <P>
             If your design is rejected, you&apos;ll be able to see the rejection
             reason inside your Creator Portal and make the required changes

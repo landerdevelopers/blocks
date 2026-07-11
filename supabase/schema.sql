@@ -1025,9 +1025,13 @@ create policy "Components: owner delete own"
   using (uploaded_by = auth.uid());
 
 -- ---------------------------------------------------------------------------
--- Upload rate limit: a creator may insert at most 30 components per IST day.
+-- Upload rate limit: a creator may insert at most 50 components per IST day.
 -- Enforced in a BEFORE INSERT trigger (not the client) so it can't be bypassed.
--- Admins are exempt. The raised message surfaces to the UploadForm.
+-- Admins are exempt — both for their own uploads AND when publishing on behalf
+-- of a creator (uploaded_by = that creator), so the cap is keyed on the ACTING
+-- user (auth.uid()), not on the row's owner. Checking only uploaded_by's role
+-- wrongly applied the creator cap to admin-on-behalf uploads.
+-- The raised message surfaces to the UploadForm.
 -- ---------------------------------------------------------------------------
 create or replace function public.enforce_creator_upload_rate()
 returns trigger
@@ -1036,9 +1040,21 @@ security definer
 set search_path = public
 as $$
 declare
+  actor         uuid := auth.uid();
+  actor_role    text;
   uploader_role text;
   today_count   int;
 begin
+  -- The acting user: an admin uploading on behalf of a creator is uncapped.
+  -- (Null auth.uid() = service-role/server path — also uncapped.)
+  if actor is null then
+    return new;
+  end if;
+  select role into actor_role from profiles where id = actor;
+  if actor_role = 'admin' then
+    return new;
+  end if;
+
   select role into uploader_role from profiles where id = new.uploaded_by;
   -- Admins have no upload cap.
   if uploader_role = 'admin' then
@@ -1050,8 +1066,8 @@ begin
   where uploaded_by = new.uploaded_by
     and (created_at at time zone 'Asia/Kolkata')::date
         = (now() at time zone 'Asia/Kolkata')::date;
-  if today_count >= 30 then
-    raise exception 'Only 30 components allowed per day';
+  if today_count >= 50 then
+    raise exception 'Only 50 components allowed per day';
   end if;
   return new;
 end;
