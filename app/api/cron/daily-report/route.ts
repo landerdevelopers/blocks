@@ -69,8 +69,12 @@ export async function GET(request: Request) {
     designsApproved: n(appr.today?.approved),
     designsRejected: n(appr.today?.rejected),
   };
+  const week = {
+    newAccounts: n(an["7d"]?.newAccounts),
+  };
   const all = {
     copies: n(an.all?.totalCopies),
+    newAccounts: n(an.all?.newAccounts),
     applied: n(app.all?.total),
     accepted: n(app.all?.approved),
     rejectedCreators: n(app.all?.rejected),
@@ -115,7 +119,8 @@ export async function GET(request: Request) {
             metric("Unique copiers", day.uniqueCopiers),
             metric("Logins", day.logins),
             metric("Active users (DAU)", day.dau),
-            metric("New accounts", day.newAccounts),
+            metric("New accounts created", day.newAccounts),
+            metric("New accounts (last 7 days)", week.newAccounts),
             metric("Creators applied", day.applied),
             metric("Creators accepted", day.accepted),
             metric("Creators rejected", day.rejectedCreators),
@@ -124,6 +129,7 @@ export async function GET(request: Request) {
             metric("Designs rejected", day.designsRejected),
           ].join(""))}
           ${section("All-time totals", [
+            metric("Total accounts", all.newAccounts),
             metric("Total components copied", all.copies),
             metric("Total creators applied", all.applied),
             metric("Total accepted creators", all.accepted),
