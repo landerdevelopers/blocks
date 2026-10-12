@@ -97,6 +97,17 @@ create table if not exists public.lander_clicks (
   created_at timestamptz not null default now()
 );
 
+-- One-time "Copy code" handoffs to Canvas (the figma-to-code app). /api/copy
+-- with canvas:true stores the copy's figma_data here; Canvas fetches it once
+-- over /api/canvas-handoff/[id] (shared secret) and the row is deleted on read.
+-- Service role only, like lander_clicks — figma_data never reaches a client.
+create table if not exists public.canvas_handoffs (
+  id         uuid primary key default gen_random_uuid(),
+  figma_data text not null,
+  created_at timestamptz not null default now()
+);
+revoke all on public.canvas_handoffs from anon, authenticated;
+
 -- Improvement suggestions submitted from the "Suggest Improvements" modal.
 -- user_id is null for logged-out submitters.
 create table if not exists public.improvements (
@@ -322,6 +333,7 @@ alter table public.components   enable row level security;
 alter table public.copy_events  enable row level security;
 alter table public.login_events enable row level security;
 alter table public.lander_clicks enable row level security;
+alter table public.canvas_handoffs enable row level security;
 alter table public.improvements enable row level security;
 
 -- profiles: users may read, insert, and update only their own row.

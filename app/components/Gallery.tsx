@@ -15,6 +15,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowUp,
   Calendar,
+  CodeXml,
   Copy,
   Globe,
   Megaphone,
@@ -170,7 +171,12 @@ export default function Gallery({
   onRequireLogin: () => void;
   onCopy: (
     componentId: string,
-  ) => Promise<{ allowed: boolean; figmaData: string | null }>;
+    canvas?: boolean,
+  ) => Promise<{
+    allowed: boolean;
+    figmaData: string | null;
+    canvasUrl?: string;
+  }>;
   category?: string | null;
   filters?: string[];
   // When set, the gallery shows ONLY this creator's published designs, still
@@ -771,6 +777,36 @@ export default function Gallery({
       });
   };
 
+  // Lightbox "Copy code" — same gated copy, but the design opens in Canvas (the
+  // figma-to-code app) instead of the clipboard. The tab is opened synchronously
+  // inside the click (popup blockers allow only that) and pointed at Canvas once
+  // /api/copy hands back the one-time handoff URL; closed again if it doesn't.
+  const [lbOpening, setLbOpening] = useState(false);
+  const openInCanvas = (e: MouseEvent) => {
+    e.stopPropagation();
+    if (!lightbox || copyLockRef.current || authLoading) return;
+    if (!loggedIn) {
+      onRequireLogin();
+      return;
+    }
+    copyLockRef.current = true;
+    setLbOpening(true);
+    const tab = window.open("", "_blank");
+    onCopy(lightbox.id, true)
+      .then((res) => {
+        if (!res.allowed || !res.canvasUrl) throw new Error("copy-not-allowed");
+        if (tab) {
+          tab.opener = null;
+          tab.location.href = res.canvasUrl;
+        } else window.location.href = res.canvasUrl;
+      })
+      .catch(() => tab?.close())
+      .finally(() => {
+        copyLockRef.current = false;
+        setLbOpening(false);
+      });
+  };
+
   // Admin: pin a component to the very top. Sets featured + a fresh featured_at
   // (the sort key) in the DB; optimistically marks it featured and moves it to
   // the front of the list so it jumps up instantly. In the logos view the list
@@ -1337,6 +1373,20 @@ export default function Gallery({
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img alt="" src="/figma.png" className="size-5" />
                       Copy to Figma
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={openInCanvas}
+                  className="flex cursor-pointer items-center justify-center gap-[6px] rounded-[12px] bg-[#09090b] px-[12px] py-[6.5px] text-[16px] font-medium tracking-[-0.03em] text-white shadow-[0px_12px_40px_rgba(0,0,0,0.4)] transition-colors hover:bg-[#27272a]"
+                >
+                  {lbOpening ? (
+                    <span className="size-5 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70" />
+                  ) : (
+                    <>
+                      <CodeXml size={18} strokeWidth={2} />
+                      Copy code
                     </>
                   )}
                 </button>
