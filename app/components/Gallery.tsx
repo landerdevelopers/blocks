@@ -15,11 +15,13 @@ import { useRouter } from "next/navigation";
 import {
   ArrowUp,
   Calendar,
+  ChevronDown,
   CodeXml,
   Copy,
   Globe,
   Megaphone,
   Pencil,
+  ShieldCheck,
   Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -1093,8 +1095,8 @@ export default function Gallery({
   // Announcement banner — sits at the top of the gallery content and scrolls
   // away with it (not pinned).
   const banner = (
-    <div className="mb-3.5 shrink-0">
-      <div className="flex h-[34px] w-fit max-w-full items-center gap-2 rounded-[10px] border border-[#e7e9ee] bg-[#F0F1F2] px-2.5 py-2">
+    <div className="mb-3.5 flex shrink-0 items-center gap-2">
+      <div className="flex h-[34px] w-fit min-w-0 max-w-full items-center gap-2 rounded-[10px] border border-[#e7e9ee] bg-[#F0F1F2] px-2.5 py-2">
         <Megaphone
           size={16}
           strokeWidth={1.5}
@@ -1112,6 +1114,32 @@ export default function Gallery({
           </a>
         </span>
       </div>
+      {/* Admins only: shortcuts to the admin pages (middleware gates them too). */}
+      {isAdmin && (
+        <details className="group/admin relative shrink-0">
+          <summary className="flex h-[34px] cursor-pointer list-none items-center gap-1.5 rounded-[10px] border border-[#e7e9ee] bg-white px-2.5 text-[14px] font-medium tracking-[-0.03em] text-[#09090b] transition-colors hover:bg-[#fafafa] [&::-webkit-details-marker]:hidden">
+            <ShieldCheck size={16} strokeWidth={1.75} />
+            Admin
+            <ChevronDown size={14} strokeWidth={2} className="transition-transform group-open/admin:rotate-180" />
+          </summary>
+          <div className="absolute left-0 top-[calc(100%+6px)] z-40 flex w-48 flex-col rounded-xl border border-[#e7e9ee] bg-white p-1 shadow-[0px_8px_24px_rgba(0,0,0,0.12)]">
+            {[
+              ["/analytics", "Analytics"],
+              ["/admin/approvals", "Design Approvals"],
+              ["/admin/applications", "Creator Applications"],
+              ["/admin/creators", "Creators"],
+            ].map(([href, label]) => (
+              <a
+                key={href}
+                href={href}
+                className="rounded-lg px-2.5 py-2 text-[14px] tracking-[-0.03em] text-[#3f3f46] transition-colors hover:bg-[#f4f4f5] hover:text-[#09090b]"
+              >
+                {label}
+              </a>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 

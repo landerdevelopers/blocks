@@ -388,6 +388,9 @@ export default function Sidebar({
   // once when the popup first opens (list_creators RPC).
   const [creatorsOpen, setCreatorsOpen] = useState(false);
   const [creatorQuery, setCreatorQuery] = useState("");
+  // While searching, the creator list grows to the bottom of the viewport
+  // (instead of 4 rows) so results aren't hidden behind a tiny scroll box.
+  const [creatorListMax, setCreatorListMax] = useState<number | null>(null);
   // Selected creator — drives the sidebar header/bio AND, via onCreatorSelect,
   // filters the gallery to just their designs.
   const [selectedCreator, setSelectedCreator] = useState<Creator | null>(null);
@@ -705,20 +708,34 @@ export default function Sidebar({
                     className="fixed inset-0 z-40"
                     onClick={() => setCreatorsOpen(false)}
                   />
-                  <div className="absolute inset-x-0 top-full z-50 mt-1 flex flex-col overflow-hidden rounded-[14px] border border-[#e7e9ee] bg-white shadow-[0px_10px_5px_rgba(0,0,0,0.04),0px_2px_2.5px_rgba(0,0,0,0.04)]">
+                  <div data-creator-popup className="absolute inset-x-0 top-full z-50 mt-1 flex flex-col overflow-hidden rounded-[14px] border border-[#e7e9ee] bg-white shadow-[0px_10px_5px_rgba(0,0,0,0.04),0px_2px_2.5px_rgba(0,0,0,0.04)]">
                     {/* Search */}
                     <div className="flex items-center gap-2 border-b border-[#e7e9ee] p-2.5">
                       <Search size={18} strokeWidth={1.5} className="shrink-0 text-[#71717b]" />
                       <input
                         value={creatorQuery}
-                        onChange={(e) => setCreatorQuery(e.target.value)}
+                        onChange={(e) => {
+                          const q = e.target.value;
+                          setCreatorQuery(q);
+                          const popup = e.currentTarget.closest<HTMLElement>("[data-creator-popup]");
+                          const list = popup?.querySelector<HTMLElement>("[data-creator-list]");
+                          if (!q || !popup || !list) return setCreatorListMax(null);
+                          const box = popup.getBoundingClientRect();
+                          const chrome = box.height - list.getBoundingClientRect().height;
+                          setCreatorListMax(Math.max(192, window.innerHeight - box.top - chrome - 16));
+                        }}
                         placeholder="Search creators"
                         className="w-full bg-transparent text-base tracking-[-0.03em] text-black outline-none placeholder:text-[#71717b]"
                       />
                     </div>
 
                     {/* List — max 4 rows visible, scroll the rest. Edge fade. */}
-                    <ScrollFadeEffect showScrollbar className="max-h-[192px]">
+                    <ScrollFadeEffect
+                      showScrollbar
+                      data-creator-list
+                      className="transition-[max-height] duration-300 ease-out"
+                      style={{ maxHeight: creatorListMax ?? 192 }}
+                    >
                         {/* All Creators — always on top; clears the selection.
                             Active (dark gray) when no creator is selected. */}
                         <button
