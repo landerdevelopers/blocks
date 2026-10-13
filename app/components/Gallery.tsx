@@ -985,46 +985,78 @@ export default function Gallery({
               }`
         }`}
       >
-        <div className="flex items-center gap-2">
         <div className="relative">
-          {/* Copy pill — in flow, sizes the wrapper. Slides down + out on copy. */}
-          <button
-            type="button"
-            onClick={onClick}
+          {/* One split pill: Copy to Figma | Copy code. In flow, sizes the
+              wrapper; slides down + out on copy. Logos get only the Figma half —
+              there is no layout in a logo to turn into code. */}
+          <div
             style={{
-              width: cfg.w,
               height: cfg.h,
               borderRadius: cfg.r,
               fontSize: cfg.fs,
               transform: isCopied ? "translateY(14px)" : "translateY(0)",
               opacity: isCopied ? 0 : undefined,
             }}
-            className={`${pill} ${cfg.gap} cursor-pointer hover:opacity-90 ${
+            className={`flex items-stretch overflow-hidden whitespace-nowrap border font-medium tracking-[-0.03em] shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,transform] duration-300 ease-out ${
               isCopied ? "pointer-events-none" : "group-hover:pointer-events-auto"
             } ${dark ? "border-black bg-black text-white" : "border-[#e7e9ee] bg-white text-[#09090b]"}`}
           >
-            {authLoading ? (
-              <>
+            <button
+              type="button"
+              onClick={onClick}
+              style={{ width: cfg.w - 2 }}
+              className={`flex cursor-pointer items-center justify-center ${cfg.gap} transition-colors ${
+                dark ? "hover:bg-white/10" : "hover:bg-[#f4f4f5]"
+              }`}
+            >
+              {authLoading ? (
+                <>
+                  <span
+                    className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+                    style={{ width: cfg.img, height: cfg.img }}
+                  />
+                  Loading…
+                </>
+              ) : isCopying ? (
+                // Fetching figma_data for this card → spinner only.
                 <span
                   className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
                   style={{ width: cfg.img, height: cfg.img }}
                 />
-                Loading…
-              </>
-            ) : isCopying ? (
-              // Fetching figma_data for this card → spinner only.
-              <span
-                className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
-                style={{ width: cfg.img, height: cfg.img }}
-              />
-            ) : (
+              ) : (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img alt="" src="/figma.png" style={{ width: cfg.img, height: cfg.img }} />
+                  Copy to Figma
+                </>
+              )}
+            </button>
+            {!dark && (
               <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img alt="" src="/figma.png" style={{ width: cfg.img, height: cfg.img }} />
-                Copy to Figma
+                <span aria-hidden style={{ height: cfg.h * 0.5 }} className="w-px shrink-0 self-center bg-[#d4d4d8]" />
+                <button
+                  type="button"
+                  title="Copy code: opens this design in our Figma to Code converter"
+                  aria-label="Copy code"
+                  onClick={(e) => openInCanvas(e, id)}
+                  style={{ paddingInline: cfg.h * 0.32 }}
+                  className={`flex cursor-pointer items-center justify-center ${cfg.gap} transition-colors hover:bg-[#f4f4f5]`}
+                >
+                  {opening === id ? (
+                    <span
+                      className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+                      style={{ width: cfg.img, height: cfg.img }}
+                    />
+                  ) : (
+                    <>
+                      <CodeXml size={cfg.img * 0.85} strokeWidth={2} />
+                      {cols <= 4 && "Code"}
+                    </>
+                  )}
+                </button>
               </>
             )}
-          </button>
+          </div>
 
           {/* Copied pill — absolutely centered over the copy pill. Rises up + in. */}
           <div
@@ -1048,35 +1080,6 @@ export default function Gallery({
             <img alt="" src="/Tick.png" style={{ width: cfg.img, height: cfg.img }} />
             {cols >= 5 ? "Copied!" : "Copied Successfully!"}
           </div>
-        </div>
-
-          {/* Copy code — opens the design in Canvas (figma-to-code). Not on
-              logos: there is no layout to turn into code. */}
-          {!dark && (
-            <button
-              type="button"
-              onClick={(e) => openInCanvas(e, id)}
-              style={{
-                height: cfg.h,
-                borderRadius: cfg.r,
-                fontSize: cfg.fs,
-                paddingInline: cfg.h * 0.4,
-              }}
-              className={`${pill} ${cfg.gap} cursor-pointer border-black bg-[#09090b] text-white hover:opacity-90 group-hover:pointer-events-auto`}
-            >
-              {opening === id ? (
-                <span
-                  className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
-                  style={{ width: cfg.img, height: cfg.img }}
-                />
-              ) : (
-                <>
-                  <CodeXml size={cfg.img * 0.9} strokeWidth={2} />
-                  {cols >= 5 ? "Code" : "Copy code"}
-                </>
-              )}
-            </button>
-          )}
         </div>
       </div>
     );
