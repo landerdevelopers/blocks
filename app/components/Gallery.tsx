@@ -963,17 +963,29 @@ export default function Gallery({
     const pad = cols >= 5 ? 3 : 4;
     const inner = cfg.r - pad / 2;
     const codeOn = !dark && codeSide === id;
-    // A segment's label: slides open when its segment is active, shut when not.
+    // A segment's label. Width animates via grid 0fr ↔ 1fr, which lands on the
+    // text's exact width — so opening and closing share one curve, run in sync,
+    // and the pill never "waits" on a max-width far bigger than the text.
     const label = (text: string, on: boolean) => (
       <span
-        className="overflow-hidden transition-[max-width,opacity,margin] duration-300 ease-out"
+        className="grid transition-[grid-template-columns,margin] duration-[400ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
         style={{
-          maxWidth: on ? cfg.w : 0,
-          opacity: on ? 1 : 0,
+          gridTemplateColumns: on ? "1fr" : "0fr",
           marginLeft: on ? cfg.img * 0.35 : 0,
         }}
       >
-        {text}
+        <span
+          className="min-w-0 overflow-hidden whitespace-nowrap transition-[opacity,filter] ease-out"
+          style={{
+            opacity: on ? 1 : 0,
+            filter: on ? "blur(0)" : "blur(2px)",
+            // Fade in after the room opens; fade out before it closes.
+            transitionDuration: on ? "300ms" : "150ms",
+            transitionDelay: on ? "100ms" : "0ms",
+          }}
+        >
+          {text}
+        </span>
       </span>
     );
     const pill =
@@ -1032,7 +1044,7 @@ export default function Gallery({
               onClick={onClick}
               onPointerEnter={() => setCodeSide(null)}
               style={{ borderRadius: inner, paddingInline: cfg.h * 0.3 }}
-              className={`flex cursor-pointer items-center justify-center transition-[background-color,color,transform] duration-300 ease-out active:scale-[0.97] ${
+              className={`flex cursor-pointer items-center justify-center transition-[background-color,color,transform] duration-[400ms] ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-[0.97] ${
                 dark
                   ? "text-white hover:bg-white/10"
                   : !codeOn
@@ -1069,7 +1081,7 @@ export default function Gallery({
                 onClick={(e) => openInCanvas(e, id)}
                 onPointerEnter={() => setCodeSide(id)}
                 style={{ borderRadius: inner, paddingInline: cfg.h * 0.3 }}
-                className={`flex cursor-pointer items-center justify-center transition-[background-color,color,transform] duration-300 ease-out active:scale-[0.97] ${
+                className={`flex cursor-pointer items-center justify-center transition-[background-color,color,transform] duration-[400ms] ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-[0.97] ${
                   codeOn
                     ? "bg-[#09090b] text-white"
                     : "text-[#09090b] hover:bg-black/[0.06]"
