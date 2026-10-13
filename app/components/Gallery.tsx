@@ -781,18 +781,18 @@ export default function Gallery({
   // figma-to-code app) instead of the clipboard. The tab is opened synchronously
   // inside the click (popup blockers allow only that) and pointed at Canvas once
   // /api/copy hands back the one-time handoff URL; closed again if it doesn't.
-  const [lbOpening, setLbOpening] = useState(false);
-  const openInCanvas = (e: MouseEvent) => {
+  const [opening, setOpening] = useState<string | null>(null);
+  const openInCanvas = (e: MouseEvent, id: string) => {
     e.stopPropagation();
-    if (!lightbox || copyLockRef.current || authLoading) return;
+    if (copyLockRef.current || authLoading) return;
     if (!loggedIn) {
       onRequireLogin();
       return;
     }
     copyLockRef.current = true;
-    setLbOpening(true);
+    setOpening(id);
     const tab = window.open("", "_blank");
-    onCopy(lightbox.id, true)
+    onCopy(id, true)
       .then((res) => {
         if (!res.allowed || !res.canvasUrl) throw new Error("copy-not-allowed");
         if (tab) {
@@ -803,7 +803,7 @@ export default function Gallery({
       .catch(() => tab?.close())
       .finally(() => {
         copyLockRef.current = false;
-        setLbOpening(false);
+        setOpening(null);
       });
   };
 
@@ -985,6 +985,7 @@ export default function Gallery({
               }`
         }`}
       >
+        <div className="flex items-center gap-2">
         <div className="relative">
           {/* Copy pill — in flow, sizes the wrapper. Slides down + out on copy. */}
           <button
@@ -1047,6 +1048,35 @@ export default function Gallery({
             <img alt="" src="/Tick.png" style={{ width: cfg.img, height: cfg.img }} />
             {cols >= 5 ? "Copied!" : "Copied Successfully!"}
           </div>
+        </div>
+
+          {/* Copy code — opens the design in Canvas (figma-to-code). Not on
+              logos: there is no layout to turn into code. */}
+          {!dark && (
+            <button
+              type="button"
+              onClick={(e) => openInCanvas(e, id)}
+              style={{
+                height: cfg.h,
+                borderRadius: cfg.r,
+                fontSize: cfg.fs,
+                paddingInline: cfg.h * 0.4,
+              }}
+              className={`${pill} ${cfg.gap} cursor-pointer border-black bg-[#09090b] text-white hover:opacity-90 group-hover:pointer-events-auto`}
+            >
+              {opening === id ? (
+                <span
+                  className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+                  style={{ width: cfg.img, height: cfg.img }}
+                />
+              ) : (
+                <>
+                  <CodeXml size={cfg.img * 0.9} strokeWidth={2} />
+                  {cols >= 5 ? "Code" : "Copy code"}
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -1378,10 +1408,10 @@ export default function Gallery({
                 </button>
                 <button
                   type="button"
-                  onClick={openInCanvas}
+                  onClick={(e) => lightbox && openInCanvas(e, lightbox.id)}
                   className="flex cursor-pointer items-center justify-center gap-[6px] rounded-[12px] bg-[#09090b] px-[12px] py-[6.5px] text-[16px] font-medium tracking-[-0.03em] text-white shadow-[0px_12px_40px_rgba(0,0,0,0.4)] transition-colors hover:bg-[#27272a]"
                 >
-                  {lbOpening ? (
+                  {opening && opening === lightbox?.id ? (
                     <span className="size-5 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70" />
                   ) : (
                     <>
