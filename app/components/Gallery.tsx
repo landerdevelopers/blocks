@@ -15,10 +15,13 @@ import { useRouter } from "next/navigation";
 import {
   ArrowUp,
   Calendar,
+  ChevronDown,
+  CodeXml,
   Copy,
   Globe,
   Megaphone,
   Pencil,
+  ShieldCheck,
   Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -170,7 +173,12 @@ export default function Gallery({
   onRequireLogin: () => void;
   onCopy: (
     componentId: string,
-  ) => Promise<{ allowed: boolean; figmaData: string | null }>;
+    canvas?: boolean,
+  ) => Promise<{
+    allowed: boolean;
+    figmaData: string | null;
+    canvasUrl?: string;
+  }>;
   category?: string | null;
   filters?: string[];
   // When set, the gallery shows ONLY this creator's published designs, still
@@ -771,6 +779,36 @@ export default function Gallery({
       });
   };
 
+  // Lightbox "Copy code" — same gated copy, but the design opens in Canvas (the
+  // figma-to-code app) instead of the clipboard. The tab is opened synchronously
+  // inside the click (popup blockers allow only that) and pointed at Canvas once
+  // /api/copy hands back the one-time handoff URL; closed again if it doesn't.
+  const [opening, setOpening] = useState<string | null>(null);
+  const openInCanvas = (e: MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (copyLockRef.current || authLoading) return;
+    if (!loggedIn) {
+      onRequireLogin();
+      return;
+    }
+    copyLockRef.current = true;
+    setOpening(id);
+    const tab = window.open("", "_blank");
+    onCopy(id, true)
+      .then((res) => {
+        if (!res.allowed || !res.canvasUrl) throw new Error("copy-not-allowed");
+        if (tab) {
+          tab.opener = null;
+          tab.location.href = res.canvasUrl;
+        } else window.location.href = res.canvasUrl;
+      })
+      .catch(() => tab?.close())
+      .finally(() => {
+        copyLockRef.current = false;
+        setOpening(null);
+      });
+  };
+
   // Admin: pin a component to the very top. Sets featured + a fresh featured_at
   // (the sort key) in the DB; optimistically marks it featured and moves it to
   // the front of the list so it jumps up instantly. In the logos view the list
@@ -921,6 +959,7 @@ export default function Gallery({
         });
     };
 
+    const btn = `flex shrink-0 cursor-pointer items-center justify-center ${cfg.gap} border shadow-[0px_4px_12px_rgba(0,0,0,0.14)] transition-[background-color,transform] duration-150 active:scale-[0.97]`;
     const pill =
       "flex items-center justify-center whitespace-nowrap border font-medium tracking-[-0.03em] shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,transform] duration-300 ease-out";
 
@@ -930,7 +969,7 @@ export default function Gallery({
     return (
       // Wrapper: positioned per layout + slides in on card hover (or when shown).
       <div
-        className={`pointer-events-none absolute z-10 transition-[opacity,translate] duration-300 ease-out ${
+        className={`pointer-events-none absolute z-10 w-max transition-[opacity,translate] duration-300 ease-out ${
           shown ? "opacity-100" : "opacity-0 group-hover:opacity-100"
         } ${
           cfg.pos === "tr"
@@ -950,44 +989,81 @@ export default function Gallery({
         }`}
       >
         <div className="relative">
-          {/* Copy pill — in flow, sizes the wrapper. Slides down + out on copy. */}
-          <button
-            type="button"
-            onClick={onClick}
+          {/* One split pill: Copy to Figma | Copy code. In flow, sizes the
+              wrapper; slides down + out on copy. Logos get only the Figma half —
+              there is no layout in a logo to turn into code. */}
+          <div
             style={{
-              width: cfg.w,
-              height: cfg.h,
-              borderRadius: cfg.r,
-              fontSize: cfg.fs,
+              gap: cfg.h * 0.18,
+              fontSize: cfg.fs * 0.94,
               transform: isCopied ? "translateY(14px)" : "translateY(0)",
               opacity: isCopied ? 0 : undefined,
             }}
-            className={`${pill} ${cfg.gap} cursor-pointer hover:opacity-90 ${
+            className={`flex items-center whitespace-nowrap font-medium tracking-[-0.03em] transition-[opacity,transform] duration-300 ease-out ${
               isCopied ? "pointer-events-none" : "group-hover:pointer-events-auto"
-            } ${dark ? "border-black bg-black text-white" : "border-[#e7e9ee] bg-white text-[#09090b]"}`}
+            }`}
           >
-            {authLoading ? (
-              <>
+            <button
+              type="button"
+              onClick={onClick}
+              style={{ height: cfg.h, borderRadius: cfg.r, paddingInline: cfg.h * 0.38 }}
+              className={`${btn} ${
+                dark
+                  ? "border-white/15 bg-black text-white hover:bg-[#1f1f22]"
+                  : "border-black bg-[#09090b] text-white hover:bg-[#27272a]"
+              }`}
+            >
+              {authLoading ? (
+                <>
+                  <span
+                    className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+                    style={{ width: cfg.img, height: cfg.img }}
+                  />
+                  Loading…
+                </>
+              ) : isCopying ? (
+                // Fetching figma_data for this card → spinner only.
                 <span
                   className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
                   style={{ width: cfg.img, height: cfg.img }}
                 />
-                Loading…
-              </>
-            ) : isCopying ? (
-              // Fetching figma_data for this card → spinner only.
-              <span
-                className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
-                style={{ width: cfg.img, height: cfg.img }}
-              />
-            ) : (
-              <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img alt="" src="/figma.png" style={{ width: cfg.img, height: cfg.img }} />
-                Copy to Figma
-              </>
+              ) : (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img alt="" src="/figma.png" className="shrink-0" style={{ width: cfg.img * 0.9, height: cfg.img * 0.9 }} />
+                  Copy to Figma
+                </>
+              )}
+            </button>
+            {/* Copy code — opens the design in Canvas (Figma to Code). Not on
+                logos: there is no layout in a logo to turn into code. */}
+            {!dark && (
+              <button
+                type="button"
+                aria-label="Copy code"
+                title="Opens this design in our Figma to Code converter"
+                onClick={(e) => openInCanvas(e, id)}
+                style={{
+                  height: cfg.h,
+                  borderRadius: cfg.r,
+                  paddingInline: cols >= 5 ? cfg.h * 0.28 : cfg.h * 0.38,
+                }}
+                className={`${btn} border-[#e7e9ee] bg-white text-[#09090b] hover:bg-[#f4f4f5]`}
+              >
+                {opening === id ? (
+                  <span
+                    className="animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+                    style={{ width: cfg.img, height: cfg.img }}
+                  />
+                ) : (
+                  <>
+                    <CodeXml className="shrink-0" size={cfg.img * 0.82} strokeWidth={2.25} />
+                    {cols <= 4 && "Copy code"}
+                  </>
+                )}
+              </button>
             )}
-          </button>
+          </div>
 
           {/* Copied pill — absolutely centered over the copy pill. Rises up + in. */}
           <div
@@ -1019,25 +1095,51 @@ export default function Gallery({
   // Announcement banner — sits at the top of the gallery content and scrolls
   // away with it (not pinned).
   const banner = (
-    <div className="mb-3.5 shrink-0">
-      <div className="flex h-[34px] w-fit max-w-full items-center gap-2 rounded-[10px] border border-[#e7e9ee] bg-[#F0F1F2] px-2.5 py-2">
+    <div className="mb-3.5 flex shrink-0 items-center gap-2">
+      <div className="flex h-[34px] w-fit min-w-0 max-w-full items-center gap-2 rounded-[10px] border border-[#e7e9ee] bg-[#F0F1F2] px-2.5 py-2">
         <Megaphone
           size={16}
           strokeWidth={1.5}
           className="shrink-0 text-[#4D4D4D]"
         />
         <span className="truncate text-[14px] tracking-[-0.03em] text-[#4D4D4D]">
-          We recently launched animated components for Framer, React, and MCP for AI tools to build modern websites.{" "}
+          New: our free Figma to Code converter. Paste any Figma design and get React, HTML, Vue and more.{" "}
           <a
-            href=" https://www.originkit.dev/?invite=j347usrcra"
+            href={process.env.NEXT_PUBLIC_CANVAS_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="underline underline-offset-2 ml-1 text-black transition-colors hover:text-black/70"
           >
-            Get access here
+            Try it free
           </a>
         </span>
       </div>
+      {/* Admins only: shortcuts to the admin pages (middleware gates them too). */}
+      {isAdmin && (
+        <details className="group/admin relative shrink-0">
+          <summary className="flex h-[34px] cursor-pointer list-none items-center gap-1.5 rounded-[10px] border border-[#e7e9ee] bg-white px-2.5 text-[14px] font-medium tracking-[-0.03em] text-[#09090b] transition-colors hover:bg-[#fafafa] [&::-webkit-details-marker]:hidden">
+            <ShieldCheck size={16} strokeWidth={1.75} />
+            Admin
+            <ChevronDown size={14} strokeWidth={2} className="transition-transform group-open/admin:rotate-180" />
+          </summary>
+          <div className="absolute left-0 top-[calc(100%+6px)] z-40 flex w-48 flex-col rounded-xl border border-[#e7e9ee] bg-white p-1 shadow-[0px_8px_24px_rgba(0,0,0,0.12)]">
+            {[
+              ["/analytics", "Analytics"],
+              ["/admin/approvals", "Design Approvals"],
+              ["/admin/applications", "Creator Applications"],
+              ["/admin/creators", "Creators"],
+            ].map(([href, label]) => (
+              <a
+                key={href}
+                href={href}
+                className="rounded-lg px-2.5 py-2 text-[14px] tracking-[-0.03em] text-[#3f3f46] transition-colors hover:bg-[#f4f4f5] hover:text-[#09090b]"
+              >
+                {label}
+              </a>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 
@@ -1337,6 +1439,20 @@ export default function Gallery({
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img alt="" src="/figma.png" className="size-5" />
                       Copy to Figma
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => lightbox && openInCanvas(e, lightbox.id)}
+                  className="flex cursor-pointer items-center justify-center gap-[6px] rounded-[12px] bg-[#09090b] px-[12px] py-[6.5px] text-[16px] font-medium tracking-[-0.03em] text-white shadow-[0px_12px_40px_rgba(0,0,0,0.4)] transition-colors hover:bg-[#27272a]"
+                >
+                  {opening && opening === lightbox?.id ? (
+                    <span className="size-5 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70" />
+                  ) : (
+                    <>
+                      <CodeXml size={18} strokeWidth={2} />
+                      Copy code
                     </>
                   )}
                 </button>

@@ -12,6 +12,7 @@ function ScrollFadeEffect({
   className = "",
   showScrollbar = false,
   children,
+  style,
   ...props
 }: React.ComponentProps<"div"> & { showScrollbar?: boolean }) {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -54,7 +55,7 @@ function ScrollFadeEffect({
             "[scrollbar-width:thin] [scrollbar-color:#d4d4d8_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#d4d4d8] [&::-webkit-scrollbar-track]:bg-transparent"
           : "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       } ${className}`}
-      style={{ maskImage: mask, WebkitMaskImage: mask }}
+      style={{ ...style, maskImage: mask, WebkitMaskImage: mask }}
       {...props}
     >
       {children}

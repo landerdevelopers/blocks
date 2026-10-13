@@ -271,18 +271,24 @@ function HomeInner({
   // the only end-user path to it — so neither limit can be bypassed from devtools.
   const tryCopy = async (
     componentId: string,
-  ): Promise<{ allowed: boolean; figmaData: string | null }> => {
+    canvas = false,
+  ): Promise<{
+    allowed: boolean;
+    figmaData: string | null;
+    canvasUrl?: string;
+  }> => {
     let data: {
       success?: boolean;
       reason?: string;
       copies_today?: number;
       figma_data?: string | null;
+      canvas_url?: string;
     } | null = null;
     try {
       const res = await fetch("/api/copy", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ componentId }),
+        body: JSON.stringify({ componentId, canvas }),
       });
       data = await res.json();
     } catch (e) {
@@ -309,7 +315,11 @@ function HomeInner({
         last_copy_date: todayIST(),
       });
     }
-    return { allowed: true, figmaData: data.figma_data ?? null };
+    return {
+      allowed: true,
+      figmaData: data.figma_data ?? null,
+      canvasUrl: data.canvas_url,
+    };
   };
 
   const logout = async () => {

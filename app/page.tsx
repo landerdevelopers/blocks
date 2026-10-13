@@ -17,8 +17,12 @@ const EMPTY_COUNTS: SidebarCounts = {
 // on first paint with no flash and no hydration mismatch.
 const getSidebarCounts = unstable_cache(
   async (): Promise<SidebarCounts> => {
-    const { data } = await createAdminClient().rpc("get_sidebar_counts");
-    return (data as SidebarCounts | null) ?? EMPTY_COUNTS;
+    const { data, error } = await createAdminClient().rpc("get_sidebar_counts");
+    // Throw rather than return EMPTY_COUNTS: unstable_cache keeps whatever is
+    // returned for 30 min, so one failed call would pin every badge at 0.
+    // A throw is not cached; Page falls back to zeros for this request only.
+    if (error || !data) throw new Error(error?.message ?? "no sidebar counts");
+    return data as SidebarCounts;
   },
   // v2: bump the cache key to discard the pre-private-filter entry (a stale
   // cached count survived the RPC fix). Tag stays "sidebar_counts" so on-demand
@@ -28,6 +32,9 @@ const getSidebarCounts = unstable_cache(
 );
 
 export default async function Page() {
-  const sidebarCounts = await getSidebarCounts();
+  const sidebarCounts = await getSidebarCounts().catch((e) => {
+    console.error("[page] get_sidebar_counts:", e.message);
+    return EMPTY_COUNTS;
+  });
   return <HomeClient initialSidebarCounts={sidebarCounts} />;
 }
