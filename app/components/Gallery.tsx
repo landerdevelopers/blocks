@@ -1063,14 +1063,14 @@ export default function Gallery({
           className="shrink-0 text-[#4D4D4D]"
         />
         <span className="truncate text-[14px] tracking-[-0.03em] text-[#4D4D4D]">
-          We recently launched animated components for Framer, React, and MCP for AI tools to build modern websites.{" "}
+          New: our free Figma to Code converter. Paste any Figma design and get React, HTML, Vue and more.{" "}
           <a
-            href=" https://www.originkit.dev/?invite=j347usrcra"
+            href={process.env.NEXT_PUBLIC_CANVAS_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="underline underline-offset-2 ml-1 text-black transition-colors hover:text-black/70"
           >
-            Get access here
+            Try it free
           </a>
         </span>
       </div>
