@@ -968,7 +968,7 @@ export default function Gallery({
     // and the pill never "waits" on a max-width far bigger than the text.
     const label = (text: string, on: boolean) => (
       <span
-        className="grid transition-[grid-template-columns,margin] duration-[400ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
+        className="grid transition-[grid-template-columns,margin] duration-[650ms] ease-[cubic-bezier(0.65,0,0.35,1)]"
         style={{
           gridTemplateColumns: on ? "1fr" : "0fr",
           marginLeft: on ? cfg.img * 0.35 : 0,
@@ -980,8 +980,8 @@ export default function Gallery({
             opacity: on ? 1 : 0,
             filter: on ? "blur(0)" : "blur(2px)",
             // Fade in after the room opens; fade out before it closes.
-            transitionDuration: on ? "300ms" : "150ms",
-            transitionDelay: on ? "100ms" : "0ms",
+            transitionDuration: on ? "450ms" : "250ms",
+            transitionDelay: on ? "200ms" : "0ms",
           }}
         >
           {text}
@@ -1044,7 +1044,7 @@ export default function Gallery({
               onClick={onClick}
               onPointerEnter={() => setCodeSide(null)}
               style={{ borderRadius: inner, paddingInline: cfg.h * 0.3 }}
-              className={`flex cursor-pointer items-center justify-center transition-[background-color,color,transform] duration-[400ms] ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-[0.97] ${
+              className={`flex cursor-pointer items-center justify-center transition-[background-color,color,transform] duration-[650ms] ease-[cubic-bezier(0.65,0,0.35,1)] active:scale-[0.97] ${
                 dark
                   ? "text-white hover:bg-white/10"
                   : !codeOn
@@ -1081,7 +1081,7 @@ export default function Gallery({
                 onClick={(e) => openInCanvas(e, id)}
                 onPointerEnter={() => setCodeSide(id)}
                 style={{ borderRadius: inner, paddingInline: cfg.h * 0.3 }}
-                className={`flex cursor-pointer items-center justify-center transition-[background-color,color,transform] duration-[400ms] ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-[0.97] ${
+                className={`flex cursor-pointer items-center justify-center transition-[background-color,color,transform] duration-[650ms] ease-[cubic-bezier(0.65,0,0.35,1)] active:scale-[0.97] ${
                   codeOn
                     ? "bg-[#09090b] text-white"
                     : "text-[#09090b] hover:bg-black/[0.06]"
