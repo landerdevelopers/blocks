@@ -782,8 +782,6 @@ export default function Gallery({
   // inside the click (popup blockers allow only that) and pointed at Canvas once
   // /api/copy hands back the one-time handoff URL; closed again if it doesn't.
   const [opening, setOpening] = useState<string | null>(null);
-  // Card whose hover pill is switched to its "Copy code" side (null = Figma).
-  const [codeSide, setCodeSide] = useState<string | null>(null);
   const openInCanvas = (e: MouseEvent, id: string) => {
     e.stopPropagation();
     if (copyLockRef.current || authLoading) return;
@@ -959,35 +957,7 @@ export default function Gallery({
         });
     };
 
-    // Toolbar inset; inner radius = outer − inset so the corners stay concentric.
-    const pad = cols >= 5 ? 3 : 4;
-    const inner = cfg.r - pad / 2;
-    const codeOn = !dark && codeSide === id;
-    // A segment's label. Width animates via grid 0fr ↔ 1fr, which lands on the
-    // text's exact width — so opening and closing share one curve, run in sync,
-    // and the pill never "waits" on a max-width far bigger than the text.
-    const label = (text: string, on: boolean) => (
-      <span
-        className="grid transition-[grid-template-columns,margin] duration-[350ms] ease-[cubic-bezier(0.65,0,0.35,1)]"
-        style={{
-          gridTemplateColumns: on ? "1fr" : "0fr",
-          marginLeft: on ? cfg.img * 0.35 : 0,
-        }}
-      >
-        <span
-          className="min-w-0 overflow-hidden whitespace-nowrap transition-[opacity,filter] ease-out"
-          style={{
-            opacity: on ? 1 : 0,
-            filter: on ? "blur(0)" : "blur(2px)",
-            // Fade in after the room opens; fade out before it closes.
-            transitionDuration: on ? "250ms" : "120ms",
-            transitionDelay: on ? "80ms" : "0ms",
-          }}
-        >
-          {text}
-        </span>
-      </span>
-    );
+    const btn = `flex shrink-0 cursor-pointer items-center justify-center ${cfg.gap} border shadow-[0px_4px_12px_rgba(0,0,0,0.14)] transition-[background-color,transform] duration-150 active:scale-[0.97]`;
     const pill =
       "flex items-center justify-center whitespace-nowrap border font-medium tracking-[-0.03em] shadow-[0px_4px_12px_rgba(0,0,0,0.12)] transition-[opacity,transform] duration-300 ease-out";
 
@@ -1021,35 +991,24 @@ export default function Gallery({
               wrapper; slides down + out on copy. Logos get only the Figma half —
               there is no layout in a logo to turn into code. */}
           <div
-            onPointerLeave={() => setCodeSide(null)}
             style={{
-              height: cfg.h + pad,
-              padding: pad,
-              gap: pad,
-              borderRadius: cfg.r + pad / 2,
+              gap: cfg.h * 0.18,
               fontSize: cfg.fs * 0.94,
               transform: isCopied ? "translateY(14px)" : "translateY(0)",
               opacity: isCopied ? 0 : undefined,
             }}
-            className={`flex items-stretch whitespace-nowrap border font-medium tracking-[-0.03em] shadow-[0px_8px_24px_rgba(0,0,0,0.18),0px_1px_2px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-[opacity,transform] duration-300 ease-out ${
+            className={`flex items-center whitespace-nowrap font-medium tracking-[-0.03em] transition-[opacity,transform] duration-300 ease-out ${
               isCopied ? "pointer-events-none" : "group-hover:pointer-events-auto"
-            } ${dark ? "border-white/10 bg-black/80" : "border-white/70 bg-white/75"}`}
+            }`}
           >
-            {/* Two segments, one label at a time: the active one is the dark
-                pill with its label, the other shrinks to its icon. Hovering a
-                segment makes it the active one, so the pill switches between
-                Copy to Figma and Copy code; leaving the card resets to Figma. */}
             <button
               type="button"
               onClick={onClick}
-              onPointerEnter={() => setCodeSide(null)}
-              style={{ borderRadius: inner, paddingInline: cfg.h * 0.3 }}
-              className={`flex shrink-0 cursor-pointer items-center justify-center transition-[background-color,color,transform] duration-[350ms] ease-[cubic-bezier(0.65,0,0.35,1)] active:scale-[0.97] ${
+              style={{ height: cfg.h, borderRadius: cfg.r, paddingInline: cfg.h * 0.38 }}
+              className={`${btn} ${
                 dark
-                  ? "text-white hover:bg-white/10"
-                  : !codeOn
-                    ? "bg-[#09090b] text-white"
-                    : "text-[#09090b] hover:bg-black/[0.06]"
+                  ? "border-white/15 bg-black text-white hover:bg-[#1f1f22]"
+                  : "border-black bg-[#09090b] text-white hover:bg-[#27272a]"
               }`}
             >
               {authLoading ? (
@@ -1070,22 +1029,24 @@ export default function Gallery({
                 <>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img alt="" src="/figma.png" className="shrink-0" style={{ width: cfg.img * 0.9, height: cfg.img * 0.9 }} />
-                  {label("Copy to Figma", !codeOn)}
+                  Copy to Figma
                 </>
               )}
             </button>
+            {/* Copy code — opens the design in Canvas (Figma to Code). Not on
+                logos: there is no layout in a logo to turn into code. */}
             {!dark && (
               <button
                 type="button"
                 aria-label="Copy code"
+                title="Opens this design in our Figma to Code converter"
                 onClick={(e) => openInCanvas(e, id)}
-                onPointerEnter={() => setCodeSide(id)}
-                style={{ borderRadius: inner, paddingInline: cfg.h * 0.3 }}
-                className={`flex shrink-0 cursor-pointer items-center justify-center transition-[background-color,color,transform] duration-[350ms] ease-[cubic-bezier(0.65,0,0.35,1)] active:scale-[0.97] ${
-                  codeOn
-                    ? "bg-[#09090b] text-white"
-                    : "text-[#09090b] hover:bg-black/[0.06]"
-                }`}
+                style={{
+                  height: cfg.h,
+                  borderRadius: cfg.r,
+                  paddingInline: cols >= 5 ? cfg.h * 0.28 : cfg.h * 0.38,
+                }}
+                className={`${btn} border-[#e7e9ee] bg-white text-[#09090b] hover:bg-[#f4f4f5]`}
               >
                 {opening === id ? (
                   <span
@@ -1095,7 +1056,7 @@ export default function Gallery({
                 ) : (
                   <>
                     <CodeXml className="shrink-0" size={cfg.img * 0.82} strokeWidth={2.25} />
-                    {label("Copy code", codeOn)}
+                    {cols <= 4 && "Copy code"}
                   </>
                 )}
               </button>
